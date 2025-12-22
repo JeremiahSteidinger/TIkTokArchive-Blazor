@@ -36,7 +36,7 @@ RUN chmod 755 /app/Tools/yt-dlp
 
 RUN mkdir -p /app/data \
     && chown -R $APP_UID:$APP_UID /app/data \
-    && chmod 755 /app/data
+    && chmod 700 /app/data
 
 USER $APP_UID
 
