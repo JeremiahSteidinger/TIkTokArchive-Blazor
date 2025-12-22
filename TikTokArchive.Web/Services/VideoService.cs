@@ -20,12 +20,13 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
         var query = dbContext.Videos
             .Include(v => v.Creator)
             .Include(v => v.Tags)
+                .ThenInclude(vt => vt.Tag)
             .AsQueryable();
 
         // Apply tag filter if specified
         if (!string.IsNullOrEmpty(tagFilter))
         {
-            query = query.Where(v => v.Tags.Any(t => t.Tag == tagFilter));
+            query = query.Where(v => v.Tags.Any(vt => vt.Tag.Name == tagFilter));
         }
 
         // Get total count before paging
@@ -229,19 +230,35 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
             }
 
             // Parse description to extract tags. Tags start with a '#' character.
+            var videoTags = new List<VideoTag>();
             if (!string.IsNullOrEmpty(video.Description))
             {
-                var tags = video.Description.Split(' ')
+                var tagNames = video.Description.Split(' ')
                     .Where(word => word.StartsWith("#"))
-                    .Select(tag => new VideoTag { Tag = tag.TrimStart('#') })
+                    .Select(tag => tag.TrimStart('#').ToLowerInvariant())
+                    .Distinct()
                     .ToList();
-                video.Tags = tags;
+                
+                // Get or create tags
+                foreach (var tagName in tagNames)
+                {
+                    var existingTag = dbContext.Tags.FirstOrDefault(t => t.Name == tagName);
+                    if (existingTag == null)
+                    {
+                        existingTag = new Tag { Name = tagName };
+                        dbContext.Tags.Add(existingTag);
+                        dbContext.SaveChanges(); // Save to get ID
+                    }
+                    
+                    videoTags.Add(new VideoTag { Tag = existingTag });
+                }
                 
                 // Remove tags from description
                 video.Description = string.Join(' ', video.Description.Split(' ')
                     .Where(word => !word.StartsWith("#")))
                     .Trim();
             }
+            video.Tags = videoTags;
 
             // Add creator to the database if it doesn't exist
             var existingCreator = dbContext.Creators
