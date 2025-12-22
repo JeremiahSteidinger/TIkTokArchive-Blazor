@@ -90,10 +90,10 @@ else
                                 @foreach(var tag in video.Tags)
                                 {
                                     <MudChip T="string" 
-                                             Color="@(selectedTag == tag.Tag ? Color.Secondary : Color.Primary)"
-                                             OnClick="@(() => FilterByTag(tag.Tag))"
+                                             Color="@(selectedTag == tag.Tag.Name ? Color.Secondary : Color.Primary)"
+                                             OnClick="@(() => FilterByTag(tag.Tag.Name))"
                                              Style="cursor: pointer;">
-                                        @tag.Tag
+                                        @tag.Tag.Name
                                     </MudChip>
                                 }
                             </MudStack>
