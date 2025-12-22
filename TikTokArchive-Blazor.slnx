@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="docker-compose.dcproj">
+    <Build />
+  </Project>
+  <Project Path="TikTokArchive.Entities/TikTokArchive.Entities.csproj" />
+  <Project Path="TikTokArchive.Web/TikTokArchive.Web.csproj" Id="ec9e4c51-581d-4866-8c0e-7ce90242bdc5" />
+</Solution>

@@ -1,0 +1,251 @@
+@page "/videos"
+@rendermode InteractiveServer
+@inject TikTokArchive.Web.Services.IVideoService VideoService
+@inject IJSRuntime JSRuntime
+@inject ISnackbar Snackbar
+@using TikTokArchive.Entities
+
+<MudStack Spacing="3">    
+    <MudPaper Class="pa-4">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudTextField @bind-Value="newVideoUrl" 
+                          Immediate="true"
+                          Label="TikTok Video URL" 
+                          Variant="Variant.Outlined" 
+                          FullWidth="true"
+                          Disabled="isSubmitting"
+                          Placeholder="Enter TikTok video URL" />
+            <MudButton Variant="Variant.Filled" 
+                       Color="Color.Primary" 
+                       OnClick="SubmitVideo"
+                       Disabled="@(isSubmitting || string.IsNullOrWhiteSpace(newVideoUrl))">
+                @if (isSubmitting)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Justify="Justify.Center">
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                        <MudText>Submitting...</MudText>
+                    </MudStack>
+                }
+                else
+                {
+                    <MudText>Submit</MudText>
+                }
+            </MudButton>
+        </MudStack>
+    </MudPaper>
+    
+    @if (!string.IsNullOrEmpty(selectedTag))
+    {
+        <MudChip T="string" 
+                 Color="Color.Primary" 
+                 OnClose="ClearTagFilter"
+                 CloseIcon="@Icons.Material.Filled.Cancel"
+                 Style="max-width: fit-content;">
+            Filtered by: @selectedTag
+        </MudChip>
+    }
+</MudStack>
+
+@if (isLoading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" Class="mt-4" />
+}
+else
+{
+    <MudStack Spacing="3" Class="mt-4">
+        @if (!videos.Any())
+        {
+            <MudAlert Severity="Severity.Info">
+                @if (!string.IsNullOrEmpty(selectedTag))
+                {
+                    <text>No videos found with tag "@selectedTag"</text>
+                }
+                else
+                {
+                    <text>No videos found.</text>
+                }
+            </MudAlert>
+        }
+        else
+        {
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; width: 100%;">
+                @foreach (var video in videos)
+                {
+                    <MudCard>
+                        <MudCardContent>
+                            <video controls
+                                   preload="metadata"
+                                   poster="/api/video/@video.TikTokVideoId/thumbnail"
+                                   style="width: 100%; border-radius: 5px;">
+                                <source src="/api/video/@video.TikTokVideoId/stream" type="video/mp4" />
+                                Your browser does not support the video tag.
+                            </video>
+                            <MudText Typo="Typo.subtitle1" Class="mt-2">
+                                @video.Creator?.DisplayName
+                            </MudText>
+                            <MudText Typo="Typo.body2" Class="mb-2">
+                                @video.Description
+                            </MudText>
+                            <MudStack Row="true" Wrap="Wrap.Wrap" Spacing="1">
+                                @foreach(var tag in video.Tags)
+                                {
+                                    <MudChip T="string" 
+                                             Color="@(selectedTag == tag.Tag ? Color.Secondary : Color.Primary)"
+                                             OnClick="@(() => FilterByTag(tag.Tag))"
+                                             Style="cursor: pointer;">
+                                        @tag.Tag
+                                    </MudChip>
+                                }
+                            </MudStack>
+                        </MudCardContent>
+                        <MudCardActions>
+                            <MudIconButton Icon="@Icons.Material.Filled.Download" 
+                                           Color="Color.Primary" 
+                                           Href="@GetDownloadUrl(video.TikTokVideoId)"
+                                           Target="_blank"
+                                           Title="Download video" />
+                            <MudSpacer />
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" 
+                                           Color="Color.Error" 
+                                           OnClick="@(() => DeleteVideo(video.TikTokVideoId))"
+                                           Title="Delete video" />
+                        </MudCardActions>
+                    </MudCard>
+                }
+            </div>
+
+            @if (totalPages > 1)
+            {
+                <MudPagination 
+                    Count="@totalPages" 
+                    Selected="@currentPage" 
+                    SelectedChanged="@OnPageChanged"
+                    Color="Color.Primary"
+                    ShowFirstButton="true"
+                    ShowLastButton="true" />
+                
+                <MudText Typo="Typo.caption" Align="Align.Center">
+                    Showing @((currentPage - 1) * pageSize + 1) to @Math.Min(currentPage * pageSize, totalCount) of @totalCount videos
+                </MudText>
+            }
+        }
+    </MudStack>
+}
+
+@code {
+    private List<Video> videos = new();
+    private string? selectedTag;
+    private bool isLoading = true;
+    private bool isSubmitting = false;
+    private string newVideoUrl = string.Empty;
+    private int currentPage = 1;
+    private int pageSize = 20;
+    private int totalCount = 0;
+    private int totalPages => (int)Math.Ceiling(totalCount / (double)pageSize);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadVideos();
+    }
+
+    private async Task LoadVideos()
+    {
+        isLoading = true;
+        try
+        {
+            var (loadedVideos, count) = await VideoService.GetVideosAsync(currentPage, pageSize, selectedTag);
+            videos = loadedVideos;
+            totalCount = count;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading videos: {ex.Message}");
+            videos = new List<Video>();
+            totalCount = 0;
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task SubmitVideo()
+    {
+        if (string.IsNullOrWhiteSpace(newVideoUrl))
+        {
+            Snackbar.Add("Please enter a video URL", Severity.Warning);
+            return;
+        }
+
+        isSubmitting = true;
+        StateHasChanged(); // Force immediate UI update to show loading state
+        
+        try
+        {
+            await VideoService.AddVideo(newVideoUrl);
+            Snackbar.Add("Video submitted successfully!", Severity.Success);
+            newVideoUrl = string.Empty;
+            currentPage = 1; // Reset to first page to see the new video
+            await LoadVideos();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to submit video: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+
+    private async Task OnPageChanged(int page)
+    {
+        currentPage = page;
+        await LoadVideos();
+    }
+
+    private async Task FilterByTag(string tag)
+    {
+        selectedTag = tag;
+        currentPage = 1;
+        await LoadVideos();
+    }
+
+    private async Task ClearTagFilter()
+    {
+        selectedTag = null;
+        currentPage = 1;
+        await LoadVideos();
+    }
+
+    private async Task DeleteVideo(string videoId)
+    {
+        if (!await JSRuntime.InvokeAsync<bool>("confirm", $"Are you sure you want to delete video {videoId}?"))
+        {
+            return;
+        }
+
+        try
+        {
+            await VideoService.DeleteVideoAsync(videoId);
+            
+            if (videos.Count == 1 && currentPage > 1)
+            {
+                currentPage--;
+            }
+            
+            await LoadVideos();
+            Snackbar.Add("Video deleted successfully", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error deleting video: {ex.Message}");
+            Snackbar.Add($"Error deleting video: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private string GetDownloadUrl(string videoId)
+    {
+        return $"/api/video/{videoId}/download";
+    }
+}
