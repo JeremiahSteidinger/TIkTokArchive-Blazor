@@ -10,10 +10,6 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Need to switch user here so that apt-get works
-USER $APP_UID
-
-
 # This stage is used to build the service project
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
@@ -34,4 +30,14 @@ RUN dotnet publish "./TikTokArchive.Web.csproj" -c $BUILD_CONFIGURATION -o /app/
 FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .
+
+# Make yt-dlp executable
+RUN chmod 755 /app/Tools/yt-dlp
+
+RUN mkdir -p /app/data \
+    && chown -R $APP_UID:$APP_UID /app/data \
+    && chmod 755 /app/data
+
+USER $APP_UID
+
 ENTRYPOINT ["dotnet", "TikTokArchive.Web.dll"]
