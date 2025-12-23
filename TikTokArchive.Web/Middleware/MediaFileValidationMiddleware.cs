@@ -47,7 +47,7 @@ namespace TikTokArchive.Web.Middleware
                 var video = await videoService.GetVideoAsync(videoId);
                 if (video == null)
                 {
-                    _logger.LogDebug("Attempt to access media file for non-existent video: {VideoId}", videoId);
+                    _logger.LogWarning("Attempt to access media file for non-existent video: {VideoId}", videoId);
                     context.Response.StatusCode = StatusCodes.Status404NotFound;
                     return;
                 }
