@@ -28,7 +28,15 @@ namespace TikTokArchive.Web.Middleware
                 
                 if (string.IsNullOrEmpty(videoId))
                 {
-                    _logger.LogDebug("Invalid media file request");
+                    _logger.LogDebug("Invalid media file request: empty filename");
+                    context.Response.StatusCode = StatusCodes.Status404NotFound;
+                    return;
+                }
+
+                // Validate that videoId contains only safe characters (alphanumeric, hyphens, underscores)
+                if (!System.Text.RegularExpressions.Regex.IsMatch(videoId, @"^[a-zA-Z0-9_-]+$"))
+                {
+                    _logger.LogDebug("Invalid media file request: videoId contains unsafe characters");
                     context.Response.StatusCode = StatusCodes.Status404NotFound;
                     return;
                 }
@@ -37,12 +45,12 @@ namespace TikTokArchive.Web.Middleware
                 var video = await videoService.GetVideoAsync(videoId);
                 if (video == null)
                 {
-                    _logger.LogDebug("Attempt to access media file for non-existent video");
+                    _logger.LogDebug("Attempt to access media file for non-existent video: {VideoId}", videoId);
                     context.Response.StatusCode = StatusCodes.Status404NotFound;
                     return;
                 }
 
-                _logger.LogDebug("Media file access validated for video");
+                _logger.LogDebug("Media file access validated for video: {VideoId}", videoId);
             }
 
             // Continue to the next middleware (static file middleware)
