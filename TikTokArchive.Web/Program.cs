@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using TikTokArchive.Entities;
 using TikTokArchive.Web.Components;
 using MudBlazor.Services;
+using TikTokArchive.Web.Middleware;
 
 namespace TikTokArchive.Web
 {
@@ -50,7 +51,21 @@ namespace TikTokArchive.Web
             app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
             //app.UseHttpsRedirection();
 
+            // Validate media file access before serving
+            app.UseMiddleware<MediaFileValidationMiddleware>();
+
             app.UseAntiforgery();
+            // Serve media files with caching
+            app.UseStaticFiles(new StaticFileOptions
+            {
+                FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider("/media"),
+                RequestPath = "/media",
+                OnPrepareResponse = ctx =>
+                {
+                    // Cache media files for 7 days
+                    ctx.Context.Response.Headers.Append("Cache-Control", "public, max-age=604800");
+                }
+            });
 
             app.MapStaticAssets();
             app.MapRazorComponents<App>()
