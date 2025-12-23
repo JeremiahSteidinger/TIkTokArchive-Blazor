@@ -52,6 +52,18 @@ namespace TikTokArchive.Web
 
             app.UseAntiforgery();
 
+            // Serve media files with caching
+            app.UseStaticFiles(new StaticFileOptions
+            {
+                FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider("/media"),
+                RequestPath = "/media",
+                OnPrepareResponse = ctx =>
+                {
+                    // Cache media files for 7 days
+                    ctx.Context.Response.Headers.Append("Cache-Control", "public, max-age=604800");
+                }
+            });
+
             app.MapStaticAssets();
             app.MapRazorComponents<App>()
                 .AddInteractiveServerRenderMode();

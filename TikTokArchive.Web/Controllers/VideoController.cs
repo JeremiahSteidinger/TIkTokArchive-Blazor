@@ -9,33 +9,6 @@ namespace TikTokArchive.Web.Controllers
     [ApiController]
     public class VideoController(IVideoService videoService, ILogger<VideoController> logger) : ControllerBase
     {
-        [HttpGet("{id}/stream")]
-        public async Task<IActionResult> Stream(string id)
-        {
-            var video = await videoService.GetVideoAsync(id);
-            if (video == null)
-            {
-                return NotFound();
-            }
-
-            var videoDirectory = "/media/videos";
-            var filePath = Directory.GetFiles(videoDirectory, $"{id}.*").FirstOrDefault();
-
-            if (filePath == null)
-            {
-                return NotFound();
-            }
-
-            var provider = new FileExtensionContentTypeProvider();
-            if (!provider.TryGetContentType(filePath, out var contentType))
-            {
-                contentType = "application/octet-stream";
-            }
-
-            var stream = System.IO.File.OpenRead(filePath);
-            return File(stream, contentType, enableRangeProcessing: true);
-        }
-
         [HttpGet("{id}/download")]
         public async Task<IActionResult> Download(string id)
         {
