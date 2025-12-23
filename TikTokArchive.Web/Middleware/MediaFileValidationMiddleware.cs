@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.StaticFiles;
 using TikTokArchive.Web.Services;
+using System.Text.RegularExpressions;
 
 namespace TikTokArchive.Web.Middleware
 {
@@ -7,6 +8,7 @@ namespace TikTokArchive.Web.Middleware
     {
         private readonly RequestDelegate _next;
         private readonly ILogger<MediaFileValidationMiddleware> _logger;
+        private static readonly Regex VideoIdPattern = new(@"^[a-zA-Z0-9_-]+$", RegexOptions.Compiled);
 
         public MediaFileValidationMiddleware(RequestDelegate next, ILogger<MediaFileValidationMiddleware> logger)
         {
@@ -34,7 +36,7 @@ namespace TikTokArchive.Web.Middleware
                 }
 
                 // Validate that videoId contains only safe characters (alphanumeric, hyphens, underscores)
-                if (!System.Text.RegularExpressions.Regex.IsMatch(videoId, @"^[a-zA-Z0-9_-]+$"))
+                if (!VideoIdPattern.IsMatch(videoId))
                 {
                     _logger.LogDebug("Invalid media file request: videoId contains unsafe characters");
                     context.Response.StatusCode = StatusCodes.Status404NotFound;
