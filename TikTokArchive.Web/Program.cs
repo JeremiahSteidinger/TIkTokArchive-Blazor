@@ -52,7 +52,7 @@ namespace TikTokArchive.Web
             //app.UseHttpsRedirection();
 
             // Validate media file access before serving
-            app.UseMiddleware<MediaFileValidationMiddleware>();
+            // app.UseMiddleware<MediaFileValidationMiddleware>();
 
             app.UseAntiforgery();
             // Serve media files with caching
