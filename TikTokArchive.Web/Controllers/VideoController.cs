@@ -42,6 +42,27 @@ namespace TikTokArchive.Web.Controllers
             return File(stream, contentType, downloadFileName);
         }
 
+        [HttpGet("{id}/stream")]
+        public IActionResult Stream(string id)
+        {
+            var videoDirectory = "/media/videos";
+            var filePath = Directory.GetFiles(videoDirectory, $"{id}.*").FirstOrDefault();
+
+            if (filePath == null)
+            {
+                return NotFound();
+            }
+
+            var provider = new FileExtensionContentTypeProvider();
+            if (!provider.TryGetContentType(filePath, out var contentType))
+            {
+                contentType = "application/octet-stream";
+            }
+
+            // Enable range request processing for video seeking and bandwidth optimization
+            return PhysicalFile(filePath, contentType, enableRangeProcessing: true);
+        }
+
         [HttpGet("{id}/thumbnail")]
         public IActionResult Thumbnail(string id)
         {
