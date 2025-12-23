@@ -23,25 +23,26 @@ namespace TikTokArchive.Web.Middleware
             {
                 // Extract the video ID from the filename
                 // Expected format: /media/videos/{videoId}.{extension} or /media/thumbnails/{videoId}.{extension}
-                var fileName = Path.GetFileNameWithoutExtension(path);
+                var fileName = Path.GetFileName(path);
+                var videoId = Path.GetFileNameWithoutExtension(fileName);
                 
-                if (string.IsNullOrEmpty(fileName))
+                if (string.IsNullOrEmpty(videoId))
                 {
-                    _logger.LogWarning("Invalid media file request: {Path}", path);
+                    _logger.LogDebug("Invalid media file request");
                     context.Response.StatusCode = StatusCodes.Status404NotFound;
                     return;
                 }
 
                 // Validate that the video exists in the database
-                var video = await videoService.GetVideoAsync(fileName);
+                var video = await videoService.GetVideoAsync(videoId);
                 if (video == null)
                 {
-                    _logger.LogWarning("Attempt to access media file for non-existent video: {VideoId}", fileName);
+                    _logger.LogDebug("Attempt to access media file for non-existent video");
                     context.Response.StatusCode = StatusCodes.Status404NotFound;
                     return;
                 }
 
-                _logger.LogDebug("Media file access validated for video: {VideoId}", fileName);
+                _logger.LogDebug("Media file access validated for video");
             }
 
             // Continue to the next middleware (static file middleware)
