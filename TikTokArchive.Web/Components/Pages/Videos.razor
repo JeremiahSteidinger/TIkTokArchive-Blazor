@@ -73,13 +73,29 @@ else
                 {
                     <MudCard>
                         <MudCardContent>
-                            <video controls
-                                   preload="metadata"
-                                   poster="/api/video/@video.TikTokVideoId/thumbnail"
-                                   style="width: 100%; border-radius: 5px;">
-                                <source src="/media/videos/@(video.TikTokVideoId).mp4" type="video/mp4" />
-                                Your browser does not support the video tag.
-                            </video>
+                            @if (!loadedVideos.Contains(video.TikTokVideoId))
+                            {
+                                <div style="position: relative; width: 100%; cursor: pointer;" @onclick="@(() => LoadVideo(video.TikTokVideoId))">
+                                    <img src="/api/video/@video.TikTokVideoId/thumbnail" 
+                                         alt="Video thumbnail"
+                                         style="width: 100%; border-radius: 5px; display: block;" />
+                                    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+                                                background: rgba(0, 0, 0, 0.6); border-radius: 50%; width: 60px; height: 60px; 
+                                                display: flex; align-items: center; justify-content: center;">
+                                        <MudIcon Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Large" Style="color: white; margin-left: 4px;" />
+                                    </div>
+                                </div>
+                            }
+                            else
+                            {
+                                <video controls
+                                       autoplay
+                                       poster="/api/video/@video.TikTokVideoId/thumbnail"
+                                       style="width: 100%; border-radius: 5px;">
+                                    <source src="/media/videos/@(video.TikTokVideoId).mp4" type="video/mp4" />
+                                    Your browser does not support the video tag.
+                                </video>
+                            }
                             <MudText Typo="Typo.subtitle1" Class="mt-2">
                                 @video.Creator?.DisplayName
                             </MudText>
@@ -134,6 +150,7 @@ else
 
 @code {
     private List<Video> videos = new();
+    private HashSet<string> loadedVideos = new();
     private string? selectedTag;
     private bool isLoading = true;
     private bool isSubmitting = false;
@@ -148,9 +165,16 @@ else
         await LoadVideos();
     }
 
+    private void LoadVideo(string videoId)
+    {
+        loadedVideos.Add(videoId);
+        StateHasChanged();
+    }
+
     private async Task LoadVideos()
     {
         isLoading = true;
+        loadedVideos.Clear(); // Clear loaded videos when navigating pages
         try
         {
             var (loadedVideos, count) = await VideoService.GetVideosAsync(currentPage, pageSize, selectedTag);
