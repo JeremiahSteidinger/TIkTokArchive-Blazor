@@ -1,4 +1,3 @@
-using Microsoft.AspNetCore.StaticFiles;
 using TikTokArchive.Web.Services;
 using System.Text.RegularExpressions;
 
@@ -21,11 +20,12 @@ namespace TikTokArchive.Web.Middleware
             var path = context.Request.Path.Value;
 
             // Only validate requests to /media/videos/* and /media/thumbnails/*
-            if (path != null && (path.StartsWith("/media/videos/") || path.StartsWith("/media/thumbnails/")))
+            if (path != null && (path.StartsWith("/media/videos/", StringComparison.OrdinalIgnoreCase) || 
+                                  path.StartsWith("/media/thumbnails/", StringComparison.OrdinalIgnoreCase)))
             {
                 // Extract the video ID from the filename
                 // Expected format: /media/videos/{videoId}.{extension} or /media/thumbnails/{videoId}.{extension}
-                var fileName = Path.GetFileName(path);
+                var fileName = path.Split('/').LastOrDefault() ?? string.Empty;
                 var videoId = Path.GetFileNameWithoutExtension(fileName);
                 
                 if (string.IsNullOrEmpty(videoId))
