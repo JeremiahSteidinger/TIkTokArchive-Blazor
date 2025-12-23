@@ -237,6 +237,7 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
                     .Where(word => word.StartsWith("#"))
                     .Select(tag => tag.TrimStart('#').ToLowerInvariant())
                     .Distinct()
+                    .Where(tagName => !string.IsNullOrWhiteSpace(tagName))
                     .ToList();
                 
                 // Get or create tags
