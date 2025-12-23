@@ -25,7 +25,7 @@ namespace TikTokArchive.Web.Middleware
             {
                 // Extract the video ID from the filename
                 // Expected format: /media/videos/{videoId}.{extension} or /media/thumbnails/{videoId}.{extension}
-                var fileName = path.Split('/').LastOrDefault() ?? string.Empty;
+                var fileName = Path.GetFileName(path);
                 var videoId = Path.GetFileNameWithoutExtension(fileName);
                 
                 if (string.IsNullOrEmpty(videoId))
