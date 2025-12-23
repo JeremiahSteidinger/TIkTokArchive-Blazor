@@ -38,7 +38,7 @@ namespace TikTokArchive.Web.Middleware
                 // Validate that videoId contains only safe characters (alphanumeric, hyphens, underscores)
                 if (!VideoIdPattern.IsMatch(videoId))
                 {
-                    _logger.LogDebug("Invalid media file request: videoId contains unsafe characters");
+                    _logger.LogWarning("Invalid media file request: videoId contains unsafe characters");
                     context.Response.StatusCode = StatusCodes.Status404NotFound;
                     return;
                 }
