@@ -59,10 +59,6 @@ namespace TikTokArchive.Web.Controllers
                 contentType = "application/octet-stream";
             }
 
-            // Set aggressive caching headers for thumbnails
-            Response.Headers.Append("Cache-Control", "public, max-age=604800, immutable");
-            Response.Headers.Append("Vary", "Accept-Encoding");
-            
             var stream = System.IO.File.OpenRead(filePath);
             return File(stream, contentType);
         }
