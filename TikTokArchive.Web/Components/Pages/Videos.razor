@@ -68,17 +68,17 @@ else
         }
         else
         {
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; width: 100%;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; width: 100%; contain: layout style;">
                 @foreach (var video in videos)
                 {
-                    <MudCard>
+                    <MudCard style="contain: content;">
                         <MudCardContent>
                             <video id="video-@video.Id" 
-                                   class="video-js vjs-default-skin"
+                                   class="video-js vjs-default-skin lazy-video"
                                    controls
                                    preload="none"
-                                   poster="/api/video/@video.TikTokVideoId/thumbnail"
-                                   style="width: 100%; border-radius: 5px;"
+                                   data-poster="/api/video/@video.TikTokVideoId/thumbnail"
+                                   style="width: 100%; border-radius: 5px; aspect-ratio: 16/9; background: #000;"
                                    data-setup='{}'>
                                 <source src="/media/videos/@(video.TikTokVideoId).mp4" type="video/mp4" />
                                 Your browser does not support the video tag.
@@ -251,4 +251,59 @@ else
     {
         return $"/api/video/{videoId}/download";
     }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender || !isLoading)
+        {
+            await JSRuntime.InvokeVoidAsync("initLazyVideos");
+        }
+    }
 }
+
+<script>
+    window.initLazyVideos = function() {
+        // Remove any existing observers
+        if (window.videoObserver) {
+            window.videoObserver.disconnect();
+        }
+
+        const lazyVideos = document.querySelectorAll('.lazy-video:not(.vjs-initialized)');
+        
+        if ('IntersectionObserver' in window) {
+            const videoObserver = new IntersectionObserver((entries, observer) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        const video = entry.target;
+                        const poster = video.getAttribute('data-poster');
+                        
+                        // Set the poster attribute only when video is in viewport
+                        if (poster && !video.getAttribute('poster')) {
+                            video.setAttribute('poster', poster);
+                        }
+                        
+                        // Unobserve this video since we've loaded it
+                        observer.unobserve(video);
+                    }
+                });
+            }, {
+                rootMargin: '50px 0px', // Start loading 50px before entering viewport
+                threshold: 0.01
+            });
+
+            lazyVideos.forEach(video => {
+                videoObserver.observe(video);
+            });
+            
+            window.videoObserver = videoObserver;
+        } else {
+            // Fallback for browsers without IntersectionObserver
+            lazyVideos.forEach(video => {
+                const poster = video.getAttribute('data-poster');
+                if (poster) {
+                    video.setAttribute('poster', poster);
+                }
+            });
+        }
+    };
+</script>
