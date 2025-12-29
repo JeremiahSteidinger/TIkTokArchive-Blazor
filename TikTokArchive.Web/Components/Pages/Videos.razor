@@ -269,7 +269,7 @@ else
             window.videoObserver.disconnect();
         }
 
-        const lazyVideos = document.querySelectorAll('.lazy-video:not(.vjs-initialized)');
+        const lazyVideos = document.querySelectorAll('.lazy-video');
         
         if ('IntersectionObserver' in window) {
             const videoObserver = new IntersectionObserver((entries, observer) => {
