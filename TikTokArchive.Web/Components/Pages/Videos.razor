@@ -254,7 +254,8 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender || !isLoading)
+        // Initialize lazy loading on first render and after videos are loaded
+        if (!isLoading)
         {
             await JSRuntime.InvokeVoidAsync("initLazyVideos");
         }
