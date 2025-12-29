@@ -27,6 +27,15 @@ namespace TikTokArchive.Web
 
             builder.Services.AddControllers();
             builder.Services.AddHttpClient();
+            
+            // Add response caching for thumbnails
+            builder.Services.AddResponseCaching();
+            
+            // Add response compression for faster transfers
+            builder.Services.AddResponseCompression(options =>
+            {
+                options.EnableForHttps = true;
+            });
 
             builder.Services.AddRazorComponents()
                 .AddInteractiveServerComponents();
@@ -47,9 +56,15 @@ namespace TikTokArchive.Web
                 app.UseExceptionHandler("/Error");
                 app.UseHsts();
             }
+            
+            // Enable response compression (must be early in pipeline)
+            app.UseResponseCompression();
 
             app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
             //app.UseHttpsRedirection();
+            
+            // Enable response caching for API endpoints
+            app.UseResponseCaching();
 
             // Validate media file access before serving
             // app.UseMiddleware<MediaFileValidationMiddleware>();

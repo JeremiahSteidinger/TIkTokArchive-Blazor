@@ -43,6 +43,7 @@ namespace TikTokArchive.Web.Controllers
         }
 
         [HttpGet("{id}/thumbnail")]
+        [ResponseCache(Duration = 604800, Location = ResponseCacheLocation.Any, VaryByQueryKeys = new[] { "id" })]
         public IActionResult Thumbnail(string id)
         {
             var thumbnailDirectory = "/media/thumbnails";
@@ -58,6 +59,10 @@ namespace TikTokArchive.Web.Controllers
                 contentType = "application/octet-stream";
             }
 
+            // Set aggressive caching headers for thumbnails
+            Response.Headers.Append("Cache-Control", "public, max-age=604800, immutable");
+            Response.Headers.Append("Vary", "Accept-Encoding");
+            
             var stream = System.IO.File.OpenRead(filePath);
             return File(stream, contentType);
         }
