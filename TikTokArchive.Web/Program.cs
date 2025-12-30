@@ -27,7 +27,7 @@ namespace TikTokArchive.Web
             }
             if (!connectionString.Contains("Command Timeout", StringComparison.OrdinalIgnoreCase))
             {
-                connectionString += "Command Timeout=60;";
+                connectionString += ";Command Timeout=60;";
             }
             if (!connectionString.Contains("Keepalive", StringComparison.OrdinalIgnoreCase))
             {
