@@ -146,7 +146,6 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
         Directory.CreateDirectory(thumbnailDirectory);
 
         // Step 1: Fetch metadata
-        string fetchMetadataArguments = $"--dump-json --output \"{Path.Combine(videoDirectory, "%(id)s.%(ext)s")}\"";
 
         // Fetch metadata and download video
         Console.WriteLine($"Fetching metadata and downloading video for URL: {tiktokUrl}");
