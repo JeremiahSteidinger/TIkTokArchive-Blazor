@@ -124,7 +124,8 @@ namespace TikTokArchive.Web.Controllers
 
             if (filePath == null)
             {
-                logger.LogWarning("Thumbnail file not found for ID: {VideoId}", id);
+                var sanitizedId = id.Replace("\r", string.Empty).Replace("\n", string.Empty);
+                logger.LogWarning("Thumbnail file not found for ID: {VideoId}", sanitizedId);
                 return NotFound();
             }
 
