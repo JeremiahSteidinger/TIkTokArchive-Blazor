@@ -16,13 +16,13 @@
                           Disabled="isSubmitting"
                           Placeholder="Enter TikTok video URL" />
             <MudButton Variant="Variant.Filled" 
-                       Color="Color.Primary" 
+                       Color="MudBlazor.Color.Primary"
                        OnClick="SubmitVideo"
                        Disabled="@(isSubmitting || string.IsNullOrWhiteSpace(newVideoUrl))">
                 @if (isSubmitting)
                 {
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Justify="Justify.Center">
-                        <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                        <MudProgressCircular Size="MudBlazor.Size.Small" Indeterminate="true" />
                         <MudText>Submitting...</MudText>
                     </MudStack>
                 }
@@ -37,7 +37,7 @@
     @if (!string.IsNullOrEmpty(selectedTag))
     {
         <MudChip T="string" 
-                 Color="Color.Primary" 
+                 Color="MudBlazor.Color.Primary"
                  OnClose="ClearTagFilter"
                  CloseIcon="@Icons.Material.Filled.Cancel"
                  Style="max-width: fit-content;">
@@ -48,7 +48,7 @@
 
 @if (isLoading)
 {
-    <MudProgressCircular Color="Color.Primary" Indeterminate="true" Class="mt-4" />
+    <MudProgressCircular Color="MudBlazor.Color.Primary" Indeterminate="true" Class="mt-4" />
 }
 else
 {
@@ -71,18 +71,22 @@ else
             <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; width: 100%; contain: layout style;">
                 @foreach (var video in videos)
                 {
-                    <MudCard style="contain: content;">
+                    var videoUrl = $"/media/videos/{video.TikTokVideoId}.mp4";
+                    var posterUrl = $"/media/thumbnails/{video.TikTokVideoId}.jpg";
+                    <MudCard>
                         <MudCardContent>
-                            <video id="video-@video.Id" 
-                                   class="video-js vjs-default-skin lazy-video"
-                                   controls
-                                   preload="none"
-                                   data-poster="/api/video/@video.TikTokVideoId/thumbnail"
-                                   style="width: 100%; border-radius: 5px; aspect-ratio: 16/9; background: #000;"
-                                   data-setup='{}'>
-                                <source src="/media/videos/@(video.TikTokVideoId).mp4" type="video/mp4" />
-                                Your browser does not support the video tag.
-                            </video>
+                            @if (!string.IsNullOrWhiteSpace(video.TikTokVideoId) && VideoExists(video.TikTokVideoId))
+                            {
+                                <Blazorise.Video.Video Source="@videoUrl"
+                                                       Poster="@posterUrl"
+                                                       DisableContextMenu="false"
+                                                       class="video-player" />
+                            }
+                            else
+                            {
+                                <div>Loading…</div>
+                            }
+
                             <MudText Typo="Typo.subtitle1" Class="mt-2">
                                 @video.Creator?.DisplayName
                             </MudText>
@@ -93,7 +97,7 @@ else
                                 @foreach(var tag in video.Tags)
                                 {
                                     <MudChip T="string" 
-                                             Color="@(selectedTag == tag.Tag.Name ? Color.Secondary : Color.Primary)"
+                                             Color="@(selectedTag == tag.Tag.Name ? MudBlazor.Color.Secondary : MudBlazor.Color.Primary)"
                                              OnClick="@(() => FilterByTag(tag.Tag.Name))"
                                              Style="cursor: pointer;">
                                         @tag.Tag.Name
@@ -103,13 +107,13 @@ else
                         </MudCardContent>
                         <MudCardActions>
                             <MudIconButton Icon="@Icons.Material.Filled.Download" 
-                                           Color="Color.Primary" 
+                                           Color="MudBlazor.Color.Primary" 
                                            Href="@GetDownloadUrl(video.TikTokVideoId)"
                                            Target="_blank"
                                            Title="Download video" />
                             <MudSpacer />
                             <MudIconButton Icon="@Icons.Material.Filled.Delete" 
-                                           Color="Color.Error" 
+                                           Color="MudBlazor.Color.Error"
                                            OnClick="@(() => DeleteVideo(video.TikTokVideoId))"
                                            Title="Delete video" />
                         </MudCardActions>
@@ -123,7 +127,7 @@ else
                     Count="@totalPages" 
                     Selected="@currentPage" 
                     SelectedChanged="@OnPageChanged"
-                    Color="Color.Primary"
+                               Color="MudBlazor.Color.Primary"
                     ShowFirstButton="true"
                     ShowLastButton="true" />
                 
@@ -136,7 +140,7 @@ else
 }
 
 @code {
-    private List<Video> videos = new();
+    private List<Entities.Video> videos = new();
     private string? selectedTag;
     private bool isLoading = true;
     private bool isSubmitting = false;
@@ -145,6 +149,7 @@ else
     private int pageSize = 20;
     private int totalCount = 0;
     private int totalPages => (int)Math.Ceiling(totalCount / (double)pageSize);
+    private string _mediaRoot = "/media";
 
     protected override async Task OnInitializedAsync()
     {
@@ -163,7 +168,7 @@ else
         catch (Exception ex)
         {
             Console.WriteLine($"Error loading videos: {ex.Message}");
-            videos = new List<Video>();
+            videos = new List<Entities.Video>();
             totalCount = 0;
         }
         finally
@@ -221,6 +226,13 @@ else
         await LoadVideos();
     }
 
+    private bool VideoExists(string id)
+    => File.Exists(Path.Combine(_mediaRoot, "videos", $"{id}.mp4"));
+
+    private bool ThumbExists(string id)
+        => File.Exists(Path.Combine(_mediaRoot, "thumbnails", $"{id}.jpg"));
+
+
     private async Task DeleteVideo(string videoId)
     {
         if (!await JSRuntime.InvokeAsync<bool>("confirm", $"Are you sure you want to delete video {videoId}?"))
@@ -251,60 +263,4 @@ else
     {
         return $"/api/video/{videoId}/download";
     }
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        // Initialize lazy loading on first render and after videos are loaded
-        if (!isLoading)
-        {
-            await JSRuntime.InvokeVoidAsync("initLazyVideos");
-        }
-    }
 }
-
-<script>
-    window.initLazyVideos = function() {
-        // Remove any existing observers
-        if (window.videoObserver) {
-            window.videoObserver.disconnect();
-        }
-
-        const lazyVideos = document.querySelectorAll('.lazy-video');
-        
-        if ('IntersectionObserver' in window) {
-            const videoObserver = new IntersectionObserver((entries, observer) => {
-                entries.forEach(entry => {
-                    if (entry.isIntersecting) {
-                        const video = entry.target;
-                        const poster = video.getAttribute('data-poster');
-                        
-                        // Set the poster attribute only when video is in viewport
-                        if (poster && !video.getAttribute('poster')) {
-                            video.setAttribute('poster', poster);
-                        }
-                        
-                        // Unobserve this video since we've loaded it
-                        observer.unobserve(video);
-                    }
-                });
-            }, {
-                rootMargin: '50px 0px', // Start loading 50px before entering viewport
-                threshold: 0.01
-            });
-
-            lazyVideos.forEach(video => {
-                videoObserver.observe(video);
-            });
-            
-            window.videoObserver = videoObserver;
-        } else {
-            // Fallback for browsers without IntersectionObserver
-            lazyVideos.forEach(video => {
-                const poster = video.getAttribute('data-poster');
-                if (poster) {
-                    video.setAttribute('poster', poster);
-                }
-            });
-        }
-    };
-</script>

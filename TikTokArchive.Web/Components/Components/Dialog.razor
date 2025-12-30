@@ -28,7 +28,7 @@
     public string CancelText { get; set; } = "Cancel";
 
     [Parameter]
-    public Color ButtonColor { get; set; } = Color.Primary;
+    public MudBlazor.Color ButtonColor { get; set; } = MudBlazor.Color.Primary;
 
     private void Submit() => MudDialog.Close(DialogResult.Ok(true));
 
