@@ -31,7 +31,7 @@ namespace TikTokArchive.Web
             }
             if (!connectionString.Contains("Keepalive", StringComparison.OrdinalIgnoreCase))
             {
-                connectionString += "Keepalive=30;";
+                connectionString += ";Keepalive=30;";
             }
 
             builder.Services.AddDbContext<TikTokArchiveDbContext>(options =>
