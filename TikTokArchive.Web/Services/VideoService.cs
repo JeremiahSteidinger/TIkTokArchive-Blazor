@@ -203,12 +203,7 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
             {
                 try
                 {
-                    var ext = Path.GetExtension(new Uri(tikTokVideo.Thumbnail).AbsolutePath);
-                    if (string.IsNullOrEmpty(ext))
-                    {
-                        ext = ".jpg";
-                    }
-                    var thumbnailPath = Path.Combine(thumbnailDirectory, $"{videoId}{ext}");
+                    var thumbnailPath = Path.Combine(thumbnailDirectory, $"{videoId}.jpg");
                     using var httpClient = new HttpClient();
                     var bytes = await httpClient.GetByteArrayAsync(tikTokVideo.Thumbnail);
                     await System.IO.File.WriteAllBytesAsync(thumbnailPath, bytes);

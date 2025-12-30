@@ -42,24 +42,104 @@ namespace TikTokArchive.Web.Controllers
             return File(stream, contentType, downloadFileName);
         }
 
-        [HttpGet("{id}/thumbnail")]
-        public IActionResult Thumbnail(string id)
+        [HttpGet("{id}/stream")]
+        public IActionResult Stream(string id)
         {
-            var thumbnailDirectory = "/media/thumbnails";
-            var filePath = Directory.GetFiles(thumbnailDirectory, $"{id}.*").FirstOrDefault();
+            // Validate video ID format for security
+            if (string.IsNullOrEmpty(id) || !System.Text.RegularExpressions.Regex.IsMatch(id, @"^[a-zA-Z0-9_-]+$"))
+            {
+                return BadRequest("Invalid video ID");
+            }
+
+            // Sanitize ID for safe logging (defense in depth against log forging)
+            var safeId = id.Replace("\r", string.Empty).Replace("\n", string.Empty);
+
+            var videoDirectory = "/media/videos";
+            
+            // Try common video extensions without searching entire directory
+            var possibleExtensions = new[] { ".mp4", ".webm", ".mov", ".avi" };
+            string? filePath = null;
+            
+            foreach (var ext in possibleExtensions)
+            {
+                var testPath = Path.Combine(videoDirectory, $"{id}{ext}");
+                if (System.IO.File.Exists(testPath))
+                {
+                    filePath = testPath;
+                    break;
+                }
+            }
+
             if (filePath == null)
             {
+                logger.LogWarning("Video file not found for ID: {VideoId}", safeId);
                 return NotFound();
             }
 
-            var provider = new FileExtensionContentTypeProvider();
-            if (!provider.TryGetContentType(filePath, out var contentType))
+            // Determine content type from extension
+            var extension = Path.GetExtension(filePath).ToLowerInvariant();
+            var contentType = extension switch
             {
-                contentType = "application/octet-stream";
+                ".mp4" => "video/mp4",
+                ".webm" => "video/webm",
+                ".mov" => "video/quicktime",
+                ".avi" => "video/x-msvideo",
+                _ => "video/mp4" // Default to mp4 instead of octet-stream
+            };
+
+            logger.LogDebug("Streaming video {VideoId} with content type {ContentType}", safeId, contentType);
+
+            // Add headers for better Firefox compatibility
+            Response.Headers.Append("Accept-Ranges", "bytes");
+            Response.Headers.Append("X-Content-Type-Options", "nosniff");
+
+            // PhysicalFile with enableRangeProcessing is the key for video streaming
+            return PhysicalFile(filePath, contentType, enableRangeProcessing: true);
+        }
+
+        [HttpGet("{id}/thumbnail")]
+        public IActionResult Thumbnail(string id)
+        {
+            // Validate video ID format for security
+            if (string.IsNullOrEmpty(id) || !System.Text.RegularExpressions.Regex.IsMatch(id, @"^[a-zA-Z0-9_-]+$"))
+            {
+                return BadRequest("Invalid video ID");
             }
 
-            var stream = System.IO.File.OpenRead(filePath);
-            return File(stream, contentType);
+            var thumbnailDirectory = "/media/thumbnails";
+            
+            // Try common image extensions
+            var possibleExtensions = new[] { ".jpg", ".jpeg", ".png", ".webp" };
+            string? filePath = null;
+            
+            foreach (var ext in possibleExtensions)
+            {
+                var testPath = Path.Combine(thumbnailDirectory, $"{id}{ext}");
+                if (System.IO.File.Exists(testPath))
+                {
+                    filePath = testPath;
+                    break;
+                }
+            }
+
+            if (filePath == null)
+            {
+                var sanitizedId = id.Replace("\r", string.Empty).Replace("\n", string.Empty);
+                logger.LogWarning("Thumbnail file not found for ID: {VideoId}", sanitizedId);
+                return NotFound();
+            }
+
+            // Determine content type from extension
+            var extension = Path.GetExtension(filePath).ToLowerInvariant();
+            var contentType = extension switch
+            {
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".png" => "image/png",
+                ".webp" => "image/webp",
+                _ => "image/jpeg"
+            };
+
+            return PhysicalFile(filePath, contentType);
         }
 
         [HttpDelete("{id}")]
