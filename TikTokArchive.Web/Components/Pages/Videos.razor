@@ -150,7 +150,6 @@ else
     private int pageSize = 20;
     private int totalCount = 0;
     private int totalPages => (int)Math.Ceiling(totalCount / (double)pageSize);
-    private string _mediaRoot = "/media";
 
     protected override async Task OnInitializedAsync()
     {
