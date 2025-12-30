@@ -1,0 +1,328 @@
+@page "/admin"
+@rendermode InteractiveServer
+@using Microsoft.EntityFrameworkCore
+@using TikTokArchive.Entities
+@using TikTokArchive.Web.Services
+@inject TikTokArchiveDbContext DbContext
+@inject ISearchService SearchService
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+
+<PageTitle>Admin - Search Configuration</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-4">Search Index Administration</MudText>
+
+<MudGrid>
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4">
+            <MudText Typo="Typo.h6" Class="mb-3">Configuration</MudText>
+            
+            <MudNumericField @bind-Value="syncIntervalMinutes"
+                             Label="Sync Interval (minutes)"
+                             Min="1"
+                             Max="1440"
+                             Variant="Variant.Outlined"
+                             Class="mb-3" />
+            
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       OnClick="SaveConfiguration"
+                       Disabled="isSavingConfig">
+                @if (isSavingConfig)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                }
+                Save Configuration
+            </MudButton>
+            
+            @if (configLastModified.HasValue)
+            {
+                <MudText Typo="Typo.caption" Class="mt-2">
+                    Last modified: @configLastModified.Value.ToLocalTime().ToString("g")
+                </MudText>
+            }
+        </MudPaper>
+    </MudItem>
+    
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4">
+            <MudText Typo="Typo.h6" Class="mb-3">Bulk Reindex</MudText>
+            
+            <MudText Typo="Typo.body2" Class="mb-3">
+                Rebuild the entire search index from the database. This may take several minutes.
+            </MudText>
+            
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Secondary"
+                       OnClick="StartReindex"
+                       Disabled="isReindexing">
+                @if (isReindexing)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                }
+                Start Bulk Reindex
+            </MudButton>
+            
+            @if (isReindexing && reindexProgress != null)
+            {
+                <div class="mt-4">
+                    <MudText Typo="Typo.body2" Class="mb-2">
+                        Progress: @reindexProgress.ProcessedCount / @reindexProgress.TotalCount
+                        (@reindexProgress.Percentage.ToString("F1")%)
+                    </MudText>
+                    <MudProgressLinear Color="Color.Primary" 
+                                       Value="@reindexProgress.Percentage" 
+                                       Size="Size.Large" />
+                </div>
+            }
+            
+            @if (!string.IsNullOrEmpty(reindexErrorMessage))
+            {
+                <MudAlert Severity="Severity.Error" Class="mt-3">@reindexErrorMessage</MudAlert>
+            }
+            
+            @if (reindexCompletedAt.HasValue)
+            {
+                <MudAlert Severity="Severity.Success" Class="mt-3">
+                    Reindex completed at @reindexCompletedAt.Value.ToLocalTime().ToString("g")
+                </MudAlert>
+            }
+        </MudPaper>
+    </MudItem>
+    
+    <MudItem xs="12">
+        <MudPaper Class="pa-4">
+            <MudText Typo="Typo.h6" Class="mb-3">Queue Status</MudText>
+            
+            <MudStack Row="true" Spacing="4" Class="mb-3">
+                <MudChip T="string" Color="Color.Info">
+                    Pending Operations: @pendingCount
+                </MudChip>
+                <MudChip T="string" Color="Color.Error">
+                    Failed Operations: @failedCount
+                </MudChip>
+            </MudStack>
+            
+            @if (recentErrors.Any())
+            {
+                <MudText Typo="Typo.subtitle2" Class="mb-2">Recent Errors:</MudText>
+                <MudTable Items="@recentErrors" Dense="true" Hover="true">
+                    <HeaderContent>
+                        <MudTh>Video ID</MudTh>
+                        <MudTh>Operation</MudTh>
+                        <MudTh>Retry Count</MudTh>
+                        <MudTh>Last Attempt</MudTh>
+                        <MudTh>Error</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>@context.VideoId</MudTd>
+                        <MudTd>@context.OperationType</MudTd>
+                        <MudTd>@context.RetryCount</MudTd>
+                        <MudTd>@context.LastAttempt?.ToLocalTime().ToString("g")</MudTd>
+                        <MudTd>
+                            <MudText Typo="Typo.caption">
+                                @(context.ErrorMessage?.Length > 50 
+                                    ? context.ErrorMessage.Substring(0, 50) + "..." 
+                                    : context.ErrorMessage)
+                            </MudText>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private int syncIntervalMinutes = 30;
+    private DateTime? configLastModified;
+    private bool isSavingConfig = false;
+    
+    private bool isReindexing = false;
+    private string? reindexSessionId;
+    private ReindexProgressData? reindexProgress;
+    private string? reindexErrorMessage;
+    private DateTime? reindexCompletedAt;
+    
+    private int pendingCount = 0;
+    private int failedCount = 0;
+    private List<ErrorItem> recentErrors = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadConfiguration();
+        await LoadQueueStatus();
+    }
+
+    private async Task LoadConfiguration()
+    {
+        try
+        {
+            var config = await DbContext.SearchIndexConfigurations.FirstOrDefaultAsync();
+            if (config != null)
+            {
+                syncIntervalMinutes = config.SyncIntervalMinutes;
+                configLastModified = config.LastModified;
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading configuration: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task SaveConfiguration()
+    {
+        isSavingConfig = true;
+        try
+        {
+            var config = await DbContext.SearchIndexConfigurations.FirstOrDefaultAsync();
+            if (config == null)
+            {
+                config = new SearchIndexConfiguration
+                {
+                    SyncIntervalMinutes = syncIntervalMinutes
+                };
+                DbContext.SearchIndexConfigurations.Add(config);
+            }
+            else
+            {
+                config.SyncIntervalMinutes = syncIntervalMinutes;
+            }
+            
+            await DbContext.SaveChangesAsync();
+            Snackbar.Add("Configuration saved successfully", Severity.Success);
+            await LoadConfiguration();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error saving configuration: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            isSavingConfig = false;
+        }
+    }
+
+    private async Task StartReindex()
+    {
+        isReindexing = true;
+        reindexErrorMessage = null;
+        reindexCompletedAt = null;
+        reindexSessionId = Guid.NewGuid().ToString();
+        
+        // Initialize progress
+        var totalVideos = await DbContext.Videos.CountAsync();
+        reindexProgress = new ReindexProgressData
+        {
+            IsRunning = true,
+            ProcessedCount = 0,
+            TotalCount = totalVideos,
+            Percentage = 0,
+            StartedAt = DateTime.UtcNow
+        };
+        
+        try
+        {
+            // Start the reindex in a background task
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var progress = new Progress<int>(processedCount =>
+                    {
+                        reindexProgress = new ReindexProgressData
+                        {
+                            IsRunning = true,
+                            ProcessedCount = processedCount,
+                            TotalCount = totalVideos,
+                            Percentage = totalVideos > 0 ? (processedCount * 100.0 / totalVideos) : 0,
+                            StartedAt = reindexProgress.StartedAt
+                        };
+                        InvokeAsync(StateHasChanged);
+                    });
+                    
+                    await SearchService.BulkReindexAsync(progress, CancellationToken.None);
+                    
+                    reindexProgress = new ReindexProgressData
+                    {
+                        IsRunning = false,
+                        ProcessedCount = totalVideos,
+                        TotalCount = totalVideos,
+                        Percentage = 100,
+                        StartedAt = reindexProgress.StartedAt,
+                        CompletedAt = DateTime.UtcNow
+                    };
+                    isReindexing = false;
+                    reindexCompletedAt = DateTime.UtcNow;
+                    await InvokeAsync(() =>
+                    {
+                        Snackbar.Add("Reindex completed successfully", Severity.Success);
+                        StateHasChanged();
+                    });
+                }
+                catch (Exception ex)
+                {
+                    reindexErrorMessage = ex.Message;
+                    isReindexing = false;
+                    await InvokeAsync(() =>
+                    {
+                        Snackbar.Add($"Reindex failed: {ex.Message}", Severity.Error);
+                        StateHasChanged();
+                    });
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error starting reindex: {ex.Message}", Severity.Error);
+            isReindexing = false;
+        }
+    }
+
+    private async Task LoadQueueStatus()
+    {
+        try
+        {
+            pendingCount = await DbContext.SearchIndexOperations.CountAsync();
+            recentErrors = await DbContext.SearchIndexOperations
+                .Where(o => o.RetryCount >= 3)
+                .OrderByDescending(o => o.LastAttempt)
+                .Take(10)
+                .Select(o => new ErrorItem
+                {
+                    VideoId = o.VideoId,
+                    OperationType = o.OperationType.ToString(),
+                    RetryCount = o.RetryCount,
+                    LastAttempt = o.LastAttempt,
+                    ErrorMessage = o.ErrorMessage
+                })
+                .ToListAsync();
+            failedCount = recentErrors.Count;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading queue status: {ex.Message}");
+        }
+    }
+
+    private class ReindexProgressData
+    {
+        public bool IsRunning { get; set; }
+        public int ProcessedCount { get; set; }
+        public int TotalCount { get; set; }
+        public double Percentage { get; set; }
+        public DateTime StartedAt { get; set; }
+        public DateTime? CompletedAt { get; set; }
+        public string? ErrorMessage { get; set; }
+    }
+
+    private class ErrorItem
+    {
+        public string VideoId { get; set; } = string.Empty;
+        public string OperationType { get; set; } = string.Empty;
+        public int RetryCount { get; set; }
+        public DateTime? LastAttempt { get; set; }
+        public string? ErrorMessage { get; set; }
+    }
+}

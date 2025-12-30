@@ -5,36 +5,88 @@
 @inject ISnackbar Snackbar
 @using TikTokArchive.Entities
 
-<MudStack Spacing="3">    
+<MudStack Spacing="3">
     <MudPaper Class="pa-4">
-        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-            <MudTextField @bind-Value="newVideoUrl" 
-                          Immediate="true"
-                          Label="TikTok Video URL" 
-                          Variant="Variant.Outlined" 
-                          FullWidth="true"
-                          Disabled="isSubmitting"
-                          Placeholder="Enter TikTok video URL" />
-            <MudButton Variant="Variant.Filled" 
-                       Color="Color.Primary" 
-                       OnClick="SubmitVideo"
-                       Disabled="@(isSubmitting || string.IsNullOrWhiteSpace(newVideoUrl))">
-                @if (isSubmitting)
-                {
-                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Justify="Justify.Center">
-                        <MudProgressCircular Size="Size.Small" Indeterminate="true" />
-                        <MudText>Submitting...</MudText>
-                    </MudStack>
-                }
-                else
-                {
-                    <MudText>Submit</MudText>
-                }
-            </MudButton>
+        <MudStack Spacing="2">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                <MudText Typo="Typo.h6">Add Video</MudText>
+                <MudIconButton Icon="@(showAddVideo ? Icons.Material.Filled.Remove : Icons.Material.Filled.Add)"
+                               Color="Color.Primary"
+                               OnClick="@(() => showAddVideo = !showAddVideo)" />
+            </MudStack>
+            
+            @if (showAddVideo)
+            {
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudTextField @bind-Value="newVideoUrl" 
+                                  Immediate="true"
+                                  Label="TikTok Video URL" 
+                                  Variant="Variant.Outlined" 
+                                  FullWidth="true"
+                                  Disabled="isSubmitting"
+                                  Placeholder="Enter TikTok video URL" />
+                    <MudButton Variant="Variant.Filled" 
+                               Color="Color.Primary" 
+                               OnClick="SubmitVideo"
+                               Disabled="@(isSubmitting || string.IsNullOrWhiteSpace(newVideoUrl))">
+                        @if (isSubmitting)
+                        {
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Justify="Justify.Center">
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                                <MudText>Submitting...</MudText>
+                            </MudStack>
+                        }
+                        else
+                        {
+                            <MudText>Submit</MudText>
+                        }
+                    </MudButton>
+                </MudStack>
+            }
         </MudStack>
     </MudPaper>
     
-    @if (!string.IsNullOrEmpty(selectedTag))
+    <MudPaper Class="pa-4">
+        <MudStack Spacing="2">
+            <MudTextField @bind-Value="searchQuery"
+                          Label="Search videos"
+                          Variant="Variant.Outlined"
+                          Placeholder="Search descriptions, creators, or tags"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          OnKeyUp="HandleSearchKeyUp"
+                          Immediate="false" />
+            
+            <MudStack Row="true" Spacing="1">
+                <MudText Typo="Typo.caption" Class="align-self-center">Search in:</MudText>
+                <MudChip T="string"
+                         Color="@(searchFields.Contains("all") ? Color.Primary : Color.Default)"
+                         OnClick="@(() => ToggleSearchField("all"))"
+                         Style="cursor: pointer;">
+                    All
+                </MudChip>
+                <MudChip T="string"
+                         Color="@(searchFields.Contains("description") ? Color.Primary : Color.Default)"
+                         OnClick="@(() => ToggleSearchField("description"))"
+                         Style="cursor: pointer;">
+                    Description
+                </MudChip>
+                <MudChip T="string"
+                         Color="@(searchFields.Contains("creator") ? Color.Primary : Color.Default)"
+                         OnClick="@(() => ToggleSearchField("creator"))"
+                         Style="cursor: pointer;">
+                    Creator
+                </MudChip>
+                <MudChip T="string"
+                         Color="@(searchFields.Contains("tags") ? Color.Primary : Color.Default)"
+                         OnClick="@(() => ToggleSearchField("tags"))"
+                         Style="cursor: pointer;">
+                    Tags
+                </MudChip>
+            </MudStack>
+        </MudStack>
+    </MudPaper>
+        @if (!string.IsNullOrEmpty(selectedTag))
     {
         <MudChip T="string" 
                  Color="Color.Primary" 
@@ -146,8 +198,12 @@ else
     private bool isLoading = true;
     private bool isSubmitting = false;
     private string newVideoUrl = string.Empty;
+    private bool showAddVideo = false;
     private int currentPage = 1;
     private int pageSize = 20;
+    private string searchQuery = string.Empty;
+    private List<string> searchFields = new() { "all" };
+    private System.Timers.Timer? searchDebounceTimer;
     private int totalCount = 0;
     private int totalPages => (int)Math.Ceiling(totalCount / (double)pageSize);
 
@@ -168,7 +224,10 @@ else
         loadedVideos.Clear(); // Clear loaded videos when navigating pages
         try
         {
-            var (loadedVideos, count) = await VideoService.GetVideosAsync(currentPage, pageSize, selectedTag);
+            var searchQueryParam = string.IsNullOrWhiteSpace(searchQuery) ? null : searchQuery;
+            var searchFieldsParam = searchFields.Contains("all") ? null : searchFields;
+            
+            var (loadedVideos, count) = await VideoService.GetVideosAsync(currentPage, pageSize, selectedTag, searchQueryParam, searchFieldsParam);
             videos = loadedVideos;
             totalCount = count;
         }
@@ -181,6 +240,54 @@ else
         finally
         {
             isLoading = false;
+        }
+    }
+
+    private void HandleSearchKeyUp(KeyboardEventArgs e)
+    {
+        searchDebounceTimer?.Stop();
+        searchDebounceTimer = new System.Timers.Timer(500);
+        searchDebounceTimer.Elapsed += async (sender, args) =>
+        {
+            searchDebounceTimer?.Stop();
+            await InvokeAsync(async () =>
+            {
+                currentPage = 1;
+                await LoadVideos();
+                StateHasChanged();
+            });
+        };
+        searchDebounceTimer.Start();
+    }
+
+    private async Task ToggleSearchField(string field)
+    {
+        if (field == "all")
+        {
+            searchFields.Clear();
+            searchFields.Add("all");
+        }
+        else
+        {
+            searchFields.Remove("all");
+            if (searchFields.Contains(field))
+            {
+                searchFields.Remove(field);
+                if (searchFields.Count == 0)
+                {
+                    searchFields.Add("all");
+                }
+            }
+            else
+            {
+                searchFields.Add(field);
+            }
+        }
+        
+        if (!string.IsNullOrWhiteSpace(searchQuery))
+        {
+            currentPage = 1;
+            await LoadVideos();
         }
     }
 

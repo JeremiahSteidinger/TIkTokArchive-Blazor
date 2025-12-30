@@ -7,24 +7,23 @@ services:
     ports:
       - "${APP_PORT:-8080}:8080"
     environment:
-      - MYSQL_CONNECTION_STRING=${MYSQL_CONNECTION_STRING:-Server=mysql;Database=tiktokarchive;User=root;Password=changeme;}
+      - OpenSearch:Url=http://opensearch:9200
     volumes:
       - ./media:/media
     depends_on:
-      - mysql
+      - opensearch
 
-  mysql:
-    image: mariadb:latest
+  opensearch:
+    image: opensearchproject/opensearch:2
     environment:
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-changeme}
-      - MYSQL_DATABASE=${MYSQL_DATABASE:-tiktokarchive}
-      - MYSQL_USER=${MYSQL_USER:-tiktok}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-changeme}
-    volumes:
-      - mysql_data:/var/lib/mysql
+      - discovery.type=single-node
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - DISABLE_SECURITY_PLUGIN=true
     ports:
-      - "${MYSQL_PORT:-3306}:3306"
+      - "9200:9200"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
 
 volumes:
-  mysql_data:
+  opensearch_data:
 

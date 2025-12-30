@@ -43,6 +43,12 @@ namespace TikTokArchive.Web
 
             builder.Services.AddScoped<Services.IVideoService, Services.VideoService>();
 
+            // Register search services
+            builder.Services.AddSingleton<Services.ISearchService, Services.OpenSearchService>();
+            builder.Services.AddSingleton<Services.SearchIndexQueue>();
+            builder.Services.AddHostedService<Services.SearchIndexBackgroundService>();
+            builder.Services.AddHostedService<Services.SearchSyncBackgroundService>();
+
             builder.Services.AddControllers();
             builder.Services.AddHttpClient();
 
@@ -57,6 +63,10 @@ namespace TikTokArchive.Web
             {
                 var dbContext = scope.ServiceProvider.GetRequiredService<TikTokArchiveDbContext>();
                 dbContext.Database.Migrate();
+
+                // Initialize OpenSearch index
+                var searchService = app.Services.GetRequiredService<Services.ISearchService>();
+                searchService.InitializeAsync().Wait();
             }
 
             // Configure the HTTP request pipeline.
