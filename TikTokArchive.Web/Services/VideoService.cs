@@ -8,16 +8,35 @@ namespace TikTokArchive.Web.Services;
 
 public interface IVideoService
 {
-    Task<(List<Video> Videos, int TotalCount)> GetVideosAsync(int page = 1, int pageSize = 20, string? tagFilter = null);
+    Task<(List<Video> Videos, int TotalCount)> GetVideosAsync(int page = 1, int pageSize = 20, string? tagFilter = null, string? searchQuery = null, List<string>? searchFields = null);
     Task<Video?> GetVideoAsync(string id);
     Task DeleteVideoAsync(string id);
     Task AddVideo(string videoUrl);
 }
 
-public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService> logger) : IVideoService
+public class VideoService : IVideoService
 {
-    public async Task<(List<Video> Videos, int TotalCount)> GetVideosAsync(int page = 1, int pageSize = 20, string? tagFilter = null)
+    private readonly TikTokArchiveDbContext dbContext;
+    private readonly ILogger<VideoService> logger;
+    private readonly SearchIndexQueue? searchIndexQueue;
+    private readonly ISearchService? searchService;
+
+    public VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService> logger, SearchIndexQueue? searchIndexQueue = null, ISearchService? searchService = null)
     {
+        this.dbContext = dbContext;
+        this.logger = logger;
+        this.searchIndexQueue = searchIndexQueue;
+        this.searchService = searchService;
+    }
+    public async Task<(List<Video> Videos, int TotalCount)> GetVideosAsync(int page = 1, int pageSize = 20, string? tagFilter = null, string? searchQuery = null, List<string>? searchFields = null)
+    {
+        // If search query provided, use search service
+        if (!string.IsNullOrWhiteSpace(searchQuery) && searchService != null)
+        {
+            var searchResult = await searchService.SearchAsync(searchQuery, page, pageSize, searchFields);
+            return (searchResult.Videos, searchResult.TotalCount);
+        }
+
         var query = dbContext.Videos
             .Include(v => v.Creator)
             .Include(v => v.Tags)
@@ -66,6 +85,8 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
         var videoDirectory = "/media/videos";
         var thumbnailDirectory = "/media/thumbnails";
 
+        var sanitizedId = id.Replace("\r", string.Empty).Replace("\n", string.Empty);
+
         // Delete video file
         var videoFiles = Directory.GetFiles(videoDirectory, $"{id}.*");
         foreach (var videoFile in videoFiles)
@@ -100,7 +121,20 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
         dbContext.Videos.Remove(video);
         await dbContext.SaveChangesAsync();
 
-        logger.LogInformation($"Successfully deleted video with ID {id}");
+        // Queue search index deletion (non-blocking)
+        try
+        {
+            if (searchIndexQueue != null)
+            {
+                await searchIndexQueue.EnqueueAsync(SearchIndexOperationType.Delete, id);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to queue search index deletion for video {VideoId}", sanitizedId);
+        }
+
+        logger.LogInformation($"Successfully deleted video with ID {sanitizedId}");
     }
 
     public async Task AddVideo(string videoUrl)
@@ -299,6 +333,19 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
         dbContext.Videos.Add(video);
 
         dbContext.SaveChanges();
+
+        // Queue search index operation (non-blocking)
+        try
+        {
+            if (searchIndexQueue != null)
+            {
+                await searchIndexQueue.EnqueueAsync(SearchIndexOperationType.Index, video.TikTokVideoId);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to queue search index operation for video {VideoId}", video.TikTokVideoId);
+        }
 
         logger.LogInformation($"Video with ID {video.TikTokVideoId} added successfully.");
     }

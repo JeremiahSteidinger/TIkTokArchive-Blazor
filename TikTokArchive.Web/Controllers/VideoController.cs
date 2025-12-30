@@ -162,10 +162,12 @@ namespace TikTokArchive.Web.Controllers
         [HttpDelete("{id}")]
         public async Task<ActionResult> Delete(string id)
         {
+            var sanitizedId = id.Replace("\r", string.Empty).Replace("\n", string.Empty);
+
             try
             {
                 await videoService.DeleteVideoAsync(id);
-                return Ok(new { message = $"Video {id} deleted successfully" });
+                return Ok(new { message = $"Video {sanitizedId} deleted successfully" });
             }
             catch (KeyNotFoundException ex)
             {
@@ -173,7 +175,7 @@ namespace TikTokArchive.Web.Controllers
             }
             catch (Exception ex)
             {
-                logger.LogError($"Error deleting video {id}: {ex.Message}");
+                logger.LogError($"Error deleting video {sanitizedId}: {ex.Message}");
                 return StatusCode(500, $"Error deleting video: {ex.Message}");
             }
         }

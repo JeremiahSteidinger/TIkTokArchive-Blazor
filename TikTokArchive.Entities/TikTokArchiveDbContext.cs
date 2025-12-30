@@ -8,6 +8,8 @@ namespace TikTokArchive.Entities
         public DbSet<Creator> Creators { get; set; }
         public DbSet<Tag> Tags { get; set; }
         public DbSet<VideoTag> VideoTags { get; set; }
+        public DbSet<SearchIndexOperation> SearchIndexOperations { get; set; }
+        public DbSet<SearchIndexConfiguration> SearchIndexConfigurations { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -43,6 +45,16 @@ namespace TikTokArchive.Entities
             modelBuilder.Entity<Video>()
                 .Property(v => v.AddedToApp)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+            // SearchIndexOperation - created timestamp default
+            modelBuilder.Entity<SearchIndexOperation>()
+                .Property(s => s.CreatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+            // SearchIndexConfiguration - last modified default
+            modelBuilder.Entity<SearchIndexConfiguration>()
+                .Property(s => s.LastModified)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
         }
     }
 }

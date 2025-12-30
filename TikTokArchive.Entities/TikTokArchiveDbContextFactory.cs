@@ -12,11 +12,12 @@ namespace TikTokArchive.Entities
 
             if (string.IsNullOrWhiteSpace(connectionString))
             {
-                throw new InvalidOperationException("MYSQL_CONNECTION_STRING environment variable is not set.");
+                // Use a dummy connection string for design-time operations (migrations)
+                connectionString = "Server=localhost;Database=tiktokarchive;User=root;Password=changeme;";
             }
 
             var optionsBuilder = new DbContextOptionsBuilder<TikTokArchiveDbContext>();
-            optionsBuilder.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString));
+            optionsBuilder.UseMySql(connectionString, new MySqlServerVersion(new Version(10, 5, 8)));
             return new TikTokArchiveDbContext(optionsBuilder.Options);
         }
     }
