@@ -214,12 +214,6 @@ else
         }
     }
 
-    private bool VideoExists(string id)
-   => File.Exists(Path.Combine(_mediaRoot, "videos", $"{id}.mp4"));
-
-    private bool ThumbExists(string id)
-        => File.Exists(Path.Combine(_mediaRoot, "thumbnails", $"{id}.jpg"));
-
     private async Task OnPageChanged(int page)
     {
         currentPage = page;
