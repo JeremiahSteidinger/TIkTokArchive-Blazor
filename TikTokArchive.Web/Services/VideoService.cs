@@ -283,7 +283,7 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
         download.ArgumentList.Add("--no-warnings");
         download.ArgumentList.Add("--no-playlist");
         download.ArgumentList.Add("-o");
-        download.ArgumentList.Add(outTpl);
+            _ = dp.StandardOutput.ReadToEnd();
         download.ArgumentList.Add(tiktokUrl);
 
         using (var dp = Process.Start(download)!)
