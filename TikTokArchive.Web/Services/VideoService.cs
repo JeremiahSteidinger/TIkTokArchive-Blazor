@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Intrinsics.Arm;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
 using TikTokArchive.Entities;
@@ -145,6 +146,8 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
         string thumbnailDirectory = "/media/thumbnails";
         Directory.CreateDirectory(thumbnailDirectory);
 
+        // Step 1: Fetch metadata
+        string fetchMetadataArguments = $"--dump-json --output \"{Path.Combine(videoDirectory, "%(id)s.%(ext)s")}\" {tiktokUrl}";
 
         // Fetch metadata and download video
         Console.WriteLine($"Fetching metadata and downloading video for URL: {tiktokUrl}");
@@ -153,17 +156,12 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
 
         var dump = new ProcessStartInfo(tool)
         {
+            Arguments = $"--dump-json --skip-download --no-warnings --no-playlist {tiktokUrl}",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
-        dump.ArgumentList.Add("--dump-json");
-        dump.ArgumentList.Add("--skip-download");
-        dump.ArgumentList.Add("--no-warnings");
-        dump.ArgumentList.Add("--no-playlist");
-        dump.ArgumentList.Add(tiktokUrl);
-
         using var p = Process.Start(dump)!;
         var json = p.StandardOutput.ReadToEnd();
         var err = p.StandardError.ReadToEnd();
@@ -207,7 +205,7 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
                 var thumbnailPath = Path.Combine(thumbnailDirectory, $"{videoId}.jpg");
                 using var httpClient = new HttpClient();
                 var bytes = await httpClient.GetByteArrayAsync(tikTokVideo.Thumbnail);
-                await System.IO.File.WriteAllBytesAsync(thumbnailPath, bytes);
+                await File.WriteAllBytesAsync(thumbnailPath, bytes);
             }
             catch (Exception thumbEx)
             {
@@ -283,7 +281,7 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
         download.ArgumentList.Add("--no-warnings");
         download.ArgumentList.Add("--no-playlist");
         download.ArgumentList.Add("-o");
-            _ = dp.StandardOutput.ReadToEnd();
+        download.ArgumentList.Add(outTpl);
         download.ArgumentList.Add(tiktokUrl);
 
         using (var dp = Process.Start(download)!)

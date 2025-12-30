@@ -12,34 +12,51 @@ namespace TikTokArchive.Web.Controllers
         [HttpGet("{id}/download")]
         public async Task<IActionResult> Download(string id)
         {
-            var video = await videoService.GetVideoAsync(id);
-            if (video == null)
+            // Validate video ID format for security
+            if (string.IsNullOrEmpty(id) || !System.Text.RegularExpressions.Regex.IsMatch(id, @"^[a-zA-Z0-9_-]+$"))
             {
-                return NotFound();
+                return BadRequest("Invalid video ID");
             }
 
             var videoDirectory = "/media/videos";
-            var filePath = Directory.GetFiles(videoDirectory, $"{id}.*").FirstOrDefault();
+            
+            // Try common video extensions without searching entire directory
+            var possibleExtensions = new[] { ".mp4", ".webm", ".mov", ".avi" };
+            string? filePath = null;
+            
+            foreach (var ext in possibleExtensions)
+            {
+                var testPath = Path.Combine(videoDirectory, $"{id}{ext}");
+                if (System.IO.File.Exists(testPath))
+                {
+                    filePath = testPath;
+                    break;
+                }
+            }
 
             if (filePath == null)
             {
+                logger.LogWarning("Video file not found for download: {VideoId}", id);
                 return NotFound();
             }
 
-            var provider = new FileExtensionContentTypeProvider();
-            if (!provider.TryGetContentType(filePath, out var contentType))
-            {
-                contentType = "application/octet-stream";
-            }
-
-            var fileName = Path.GetFileName(filePath);
             var fileExtension = Path.GetExtension(filePath);
             
-            // Create a friendly filename: Creator_VideoId.ext
-            var downloadFileName = $"{video.Creator?.DisplayName?.Replace(" ", "_") ?? "TikTok"}_{id}{fileExtension}";
+            // Determine content type from extension
+            var contentType = fileExtension.ToLowerInvariant() switch
+            {
+                ".mp4" => "video/mp4",
+                ".webm" => "video/webm",
+                ".mov" => "video/quicktime",
+                ".avi" => "video/x-msvideo",
+                _ => "application/octet-stream"
+            };
 
-            var stream = System.IO.File.OpenRead(filePath);
-            return File(stream, contentType, downloadFileName);
+            // Get video metadata for friendly filename (async after finding file)
+            var video = await videoService.GetVideoAsync(id);
+            var downloadFileName = $"{video?.Creator?.DisplayName?.Replace(" ", "_") ?? "TikTok"}_{id}{fileExtension}";
+
+            return PhysicalFile(filePath, contentType, downloadFileName);
         }
 
         [HttpGet("{id}/stream")]
