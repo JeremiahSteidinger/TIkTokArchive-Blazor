@@ -146,7 +146,7 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
         Directory.CreateDirectory(thumbnailDirectory);
 
         // Step 1: Fetch metadata
-        string fetchMetadataArguments = $"--dump-json --output \"{Path.Combine(videoDirectory, "%(id)s.%(ext)s")}\" {tiktokUrl}";
+        string fetchMetadataArguments = $"--dump-json --output \"{Path.Combine(videoDirectory, "%(id)s.%(ext)s")}\"";
 
         // Fetch metadata and download video
         Console.WriteLine($"Fetching metadata and downloading video for URL: {tiktokUrl}");
@@ -155,12 +155,17 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
 
         var dump = new ProcessStartInfo(tool)
         {
-            Arguments = $"--dump-json --skip-download --no-warnings --no-playlist {tiktokUrl}",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        dump.ArgumentList.Add("--dump-json");
+        dump.ArgumentList.Add("--skip-download");
+        dump.ArgumentList.Add("--no-warnings");
+        dump.ArgumentList.Add("--no-playlist");
+        dump.ArgumentList.Add(tiktokUrl);
+
         using var p = Process.Start(dump)!;
         var json = p.StandardOutput.ReadToEnd();
         var err = p.StandardError.ReadToEnd();
