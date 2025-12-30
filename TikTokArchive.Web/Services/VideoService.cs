@@ -148,165 +148,157 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
         // Step 1: Fetch metadata
         string fetchMetadataArguments = $"--dump-json --output \"{Path.Combine(videoDirectory, "%(id)s.%(ext)s")}\" {tiktokUrl}";
 
-        try
+        // Fetch metadata and download video
+        Console.WriteLine($"Fetching metadata and downloading video for URL: {tiktokUrl}");
+
+        var tool = Path.Combine(AppContext.BaseDirectory, "Tools", "yt-dlp");
+
+        var dump = new ProcessStartInfo(tool)
         {
-            // Fetch metadata and download video
-            Console.WriteLine($"Fetching metadata and downloading video for URL: {tiktokUrl}");
-
-            var tool = Path.Combine(AppContext.BaseDirectory, "Tools", "yt-dlp");
-
-            var dump = new ProcessStartInfo(tool)
-            {
-                Arguments = $"--dump-json --skip-download --no-warnings --no-playlist {tiktokUrl}",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            using var p = Process.Start(dump)!;
-            var json = p.StandardOutput.ReadToEnd();
-            var err = p.StandardError.ReadToEnd();
-            p.WaitForExit();
-            if (p.ExitCode != 0)
-            {
-                Console.WriteLine($"Error fetching metadata: {err}");
-            }
-
-            var tikTokVideo = JsonConvert.DeserializeObject<TikTokVideo>(json)!;
-            var videoId = tikTokVideo.VideoId; // safe & unambiguous
-
-            if (string.IsNullOrEmpty(videoId))
-            {
-                Console.WriteLine("Failed to extract video ID from metadata.");
-                throw new Exception ("Failed to extract video ID from metadata");
-            }
-
-            // Create a new Video entity
-            Video video = new Video
-            {
-                TikTokVideoId = videoId,
-                Description = tikTokVideo.Description,
-                AddedToApp = DateTime.UtcNow,
-                Creator = new Creator
-                {
-                    TikTokId = tikTokVideo.Uploader,
-                    DisplayName = tikTokVideo.Channel
-                }
-            };
-
-            // Set the CreatedAt property from tikTokVideo Epoc value
-            DateTime dateTime = DateTimeOffset.FromUnixTimeSeconds(tikTokVideo.Timestamp).UtcDateTime;
-            video.CreatedAt = dateTime;
-
-            // Download thumbnail and save to file system
-            if (!string.IsNullOrEmpty(tikTokVideo.Thumbnail))
-            {
-                try
-                {
-                    var thumbnailPath = Path.Combine(thumbnailDirectory, $"{videoId}.jpg");
-                    using var httpClient = new HttpClient();
-                    var bytes = await httpClient.GetByteArrayAsync(tikTokVideo.Thumbnail);
-                    await System.IO.File.WriteAllBytesAsync(thumbnailPath, bytes);
-                }
-                catch (Exception thumbEx)
-                {
-                    logger.LogError($"Failed to download thumbnail for {videoId}: {thumbEx.Message}");
-                }
-            }
-
-            // Check if the video already exists in the database
-            var existingVideo = dbContext.Videos
-                .Include(v => v.Creator)
-                .FirstOrDefault(v => v.TikTokVideoId == video.TikTokVideoId);
-            if (existingVideo != null)
-            {
-                logger.LogInformation($"Video with ID {video.TikTokVideoId} already exists in the database.");
-                throw new Exception("Video already exists");
-            }
-
-            // Parse description to extract tags. Tags start with a '#' character.
-            var videoTags = new List<VideoTag>();
-            if (!string.IsNullOrEmpty(video.Description))
-            {
-                var tagNames = video.Description.Split(' ')
-                    .Where(word => word.StartsWith("#"))
-                    .Select(tag => tag.TrimStart('#').ToLowerInvariant())
-                    .Distinct()
-                    .Where(tagName => !string.IsNullOrWhiteSpace(tagName))
-                    .ToList();
-                
-                // Get or create tags
-                foreach (var tagName in tagNames)
-                {
-                    var existingTag = dbContext.Tags.FirstOrDefault(t => t.Name == tagName);
-                    if (existingTag == null)
-                    {
-                        existingTag = new Tag { Name = tagName };
-                        dbContext.Tags.Add(existingTag);
-                        dbContext.SaveChanges(); // Save to get ID
-                    }
-                    
-                    videoTags.Add(new VideoTag { Tag = existingTag });
-                }
-                
-                // Remove tags from description
-                video.Description = string.Join(' ', video.Description.Split(' ')
-                    .Where(word => !word.StartsWith("#")))
-                    .Trim();
-            }
-            video.Tags = videoTags;
-
-            // Add creator to the database if it doesn't exist
-            var existingCreator = dbContext.Creators
-                .FirstOrDefault(c => c.TikTokId == video.Creator.TikTokId);
-
-            if (existingCreator == null)
-            {
-                dbContext.Creators.Add(video.Creator);
-            }
-            else
-            {
-                video.Creator = existingCreator;
-            }
-
-            var outTpl = Path.Combine(videoDirectory, "%(id)s.%(ext)s");
-
-            var download = new ProcessStartInfo(tool)
-            {
-                Arguments = string.Empty,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            download.ArgumentList.Add("--no-warnings");
-            download.ArgumentList.Add("--no-playlist");
-            download.ArgumentList.Add("-o");
-            download.ArgumentList.Add(outTpl);
-            download.ArgumentList.Add(tiktokUrl);
-
-            using (var dp = Process.Start(download)!)
-            {
-                var _ = dp.StandardOutput.ReadToEnd();
-                dp.WaitForExit();
-                if (dp.ExitCode != 0)
-                {
-                    logger.LogError($"Download failed for {videoId}: {err}");
-                    throw new Exception("Video download failed");
-                }
-            }
-
-            // Add the video to the database
-            dbContext.Videos.Add(video);
-
-            dbContext.SaveChanges();
-
-            logger.LogInformation($"Video with ID {video.TikTokVideoId} added successfully.");
-        }
-        catch (Exception ex)
+            Arguments = $"--dump-json --skip-download --no-warnings --no-playlist {tiktokUrl}",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        using var p = Process.Start(dump)!;
+        var json = p.StandardOutput.ReadToEnd();
+        var err = p.StandardError.ReadToEnd();
+        p.WaitForExit();
+        if (p.ExitCode != 0)
         {
-            logger.LogError($"Error fetching metadata: {ex.Message}");
-            throw new Exception("Video download failed");
+            Console.WriteLine($"Error fetching metadata: {err}");
         }
+
+        var tikTokVideo = JsonConvert.DeserializeObject<TikTokVideo>(json)!;
+        var videoId = tikTokVideo.VideoId; // safe & unambiguous
+
+        if (string.IsNullOrEmpty(videoId))
+        {
+            Console.WriteLine("Failed to extract video ID from metadata.");
+            throw new Exception("Failed to extract video ID from metadata");
+        }
+
+        // Create a new Video entity
+        Video video = new Video
+        {
+            TikTokVideoId = videoId,
+            Description = tikTokVideo.Description,
+            AddedToApp = DateTime.UtcNow,
+            Creator = new Creator
+            {
+                TikTokId = tikTokVideo.Uploader,
+                DisplayName = tikTokVideo.Channel
+            }
+        };
+
+        // Set the CreatedAt property from tikTokVideo Epoc value
+        DateTime dateTime = DateTimeOffset.FromUnixTimeSeconds(tikTokVideo.Timestamp).UtcDateTime;
+        video.CreatedAt = dateTime;
+
+        // Download thumbnail and save to file system
+        if (!string.IsNullOrEmpty(tikTokVideo.Thumbnail))
+        {
+            try
+            {
+                var thumbnailPath = Path.Combine(thumbnailDirectory, $"{videoId}.jpg");
+                using var httpClient = new HttpClient();
+                var bytes = await httpClient.GetByteArrayAsync(tikTokVideo.Thumbnail);
+                await System.IO.File.WriteAllBytesAsync(thumbnailPath, bytes);
+            }
+            catch (Exception thumbEx)
+            {
+                logger.LogError($"Failed to download thumbnail for {videoId}: {thumbEx.Message}");
+            }
+        }
+
+        // Check if the video already exists in the database
+        var existingVideo = dbContext.Videos
+            .Include(v => v.Creator)
+            .FirstOrDefault(v => v.TikTokVideoId == video.TikTokVideoId);
+        if (existingVideo != null)
+        {
+            logger.LogInformation($"Video with ID {video.TikTokVideoId} already exists in the database.");
+            throw new Exception("Video already exists");
+        }
+
+        // Parse description to extract tags. Tags start with a '#' character.
+        var videoTags = new List<VideoTag>();
+        if (!string.IsNullOrEmpty(video.Description))
+        {
+            var tagNames = video.Description.Split(' ')
+                .Where(word => word.StartsWith("#"))
+                .Select(tag => tag.TrimStart('#').ToLowerInvariant())
+                .Distinct()
+                .Where(tagName => !string.IsNullOrWhiteSpace(tagName))
+                .ToList();
+
+            // Get or create tags
+            foreach (var tagName in tagNames)
+            {
+                var existingTag = dbContext.Tags.FirstOrDefault(t => t.Name == tagName);
+                if (existingTag == null)
+                {
+                    existingTag = new Tag { Name = tagName };
+                    dbContext.Tags.Add(existingTag);
+                    dbContext.SaveChanges(); // Save to get ID
+                }
+
+                videoTags.Add(new VideoTag { Tag = existingTag });
+            }
+
+            // Remove tags from description
+            video.Description = string.Join(' ', video.Description.Split(' ')
+                .Where(word => !word.StartsWith("#")))
+                .Trim();
+        }
+        video.Tags = videoTags;
+
+        // Add creator to the database if it doesn't exist
+        var existingCreator = dbContext.Creators
+            .FirstOrDefault(c => c.TikTokId == video.Creator.TikTokId);
+
+        if (existingCreator == null)
+        {
+            dbContext.Creators.Add(video.Creator);
+        }
+        else
+        {
+            video.Creator = existingCreator;
+        }
+
+        var outTpl = Path.Combine(videoDirectory, "%(id)s.%(ext)s");
+
+        var download = new ProcessStartInfo(tool)
+        {
+            Arguments = string.Empty,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        download.ArgumentList.Add("--no-warnings");
+        download.ArgumentList.Add("--no-playlist");
+        download.ArgumentList.Add("-o");
+        download.ArgumentList.Add(outTpl);
+        download.ArgumentList.Add(tiktokUrl);
+
+        using (var dp = Process.Start(download)!)
+        {
+            var _ = dp.StandardOutput.ReadToEnd();
+            dp.WaitForExit();
+            if (dp.ExitCode != 0)
+            {
+                logger.LogError($"Download failed for {videoId}: {err}");
+                throw new Exception("Video download failed");
+            }
+        }
+
+        // Add the video to the database
+        dbContext.Videos.Add(video);
+
+        dbContext.SaveChanges();
+
+        logger.LogInformation($"Video with ID {video.TikTokVideoId} added successfully.");
     }
 }
