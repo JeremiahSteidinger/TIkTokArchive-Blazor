@@ -51,6 +51,9 @@ namespace TikTokArchive.Web.Controllers
                 return BadRequest("Invalid video ID");
             }
 
+            // Sanitize ID for safe logging (defense in depth against log forging)
+            var safeId = id.Replace("\r", string.Empty).Replace("\n", string.Empty);
+
             var videoDirectory = "/media/videos";
             
             // Try common video extensions without searching entire directory
@@ -69,7 +72,7 @@ namespace TikTokArchive.Web.Controllers
 
             if (filePath == null)
             {
-                logger.LogWarning("Video file not found for ID: {VideoId}", id);
+                logger.LogWarning("Video file not found for ID: {VideoId}", safeId);
                 return NotFound();
             }
 
@@ -84,7 +87,7 @@ namespace TikTokArchive.Web.Controllers
                 _ => "video/mp4" // Default to mp4 instead of octet-stream
             };
 
-            logger.LogDebug("Streaming video {VideoId} with content type {ContentType}", id, contentType);
+            logger.LogDebug("Streaming video {VideoId} with content type {ContentType}", safeId, contentType);
 
             // Add headers for better Firefox compatibility
             Response.Headers.Append("Accept-Ranges", "bytes");
