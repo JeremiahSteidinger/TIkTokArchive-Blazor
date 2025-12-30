@@ -53,11 +53,13 @@ namespace TikTokArchive.Web.Services
                     VideoId = videoId
                 });
 
-                _logger.LogDebug("Enqueued {OperationType} operation for video {VideoId}", operationType, videoId);
+                var sanitizedVideoId = videoId.Replace("\r", string.Empty).Replace("\n", string.Empty);
+                _logger.LogDebug("Enqueued {OperationType} operation for video {VideoId}", operationType, sanitizedVideoId);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error enqueuing search index operation for video {VideoId}", videoId);
+                var sanitizedVideoId = videoId.Replace("\r", string.Empty).Replace("\n", string.Empty);
+                _logger.LogError(ex, "Error enqueuing search index operation for video {VideoId}", sanitizedVideoId);
             }
         }
 

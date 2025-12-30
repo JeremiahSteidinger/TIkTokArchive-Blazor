@@ -85,6 +85,8 @@ public class VideoService : IVideoService
         var videoDirectory = "/media/videos";
         var thumbnailDirectory = "/media/thumbnails";
 
+        var sanitizedId = id.Replace("\r", string.Empty).Replace("\n", string.Empty);
+
         // Delete video file
         var videoFiles = Directory.GetFiles(videoDirectory, $"{id}.*");
         foreach (var videoFile in videoFiles)
@@ -129,10 +131,10 @@ public class VideoService : IVideoService
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to queue search index deletion for video {VideoId}", id);
+            logger.LogError(ex, "Failed to queue search index deletion for video {VideoId}", sanitizedId);
         }
 
-        logger.LogInformation($"Successfully deleted video with ID {id}");
+        logger.LogInformation($"Successfully deleted video with ID {sanitizedId}");
     }
 
     public async Task AddVideo(string videoUrl)
