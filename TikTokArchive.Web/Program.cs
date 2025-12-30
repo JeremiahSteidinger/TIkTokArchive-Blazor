@@ -20,8 +20,26 @@ namespace TikTokArchive.Web
                 throw new InvalidOperationException("MYSQL_CONNECTION_STRING environment variable is not set.");
             }
 
+            // Add connection timeout and pooling settings if not already in connection string
+            if (!connectionString.Contains("Connection Timeout", StringComparison.OrdinalIgnoreCase))
+            {
+                connectionString += ";Connection Timeout=30;";
+            }
+            if (!connectionString.Contains("Command Timeout", StringComparison.OrdinalIgnoreCase))
+            {
+                connectionString += "Command Timeout=60;";
+            }
+            if (!connectionString.Contains("Keepalive", StringComparison.OrdinalIgnoreCase))
+            {
+                connectionString += "Keepalive=30;";
+            }
+
             builder.Services.AddDbContext<TikTokArchiveDbContext>(options =>
-                options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
+                options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString),
+                    mySqlOptions => mySqlOptions.EnableRetryOnFailure(
+                        maxRetryCount: 5,
+                        maxRetryDelay: TimeSpan.FromSeconds(10),
+                        errorNumbersToAdd: null)));
 
             builder.Services.AddScoped<Services.IVideoService, Services.VideoService>();
 
@@ -51,27 +69,14 @@ namespace TikTokArchive.Web
             app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
             //app.UseHttpsRedirection();
 
-            // Validate media file access before serving
-            // app.UseMiddleware<MediaFileValidationMiddleware>();
-
             app.UseAntiforgery();
-            // Serve media files with caching
-            app.UseStaticFiles(new StaticFileOptions
-            {
-                FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider("/media"),
-                RequestPath = "/media",
-                OnPrepareResponse = ctx =>
-                {
-                    // Cache media files for 7 days
-                    ctx.Context.Response.Headers.Append("Cache-Control", "public, max-age=604800");
-                }
-            });
 
+            // Map controllers first before static files
+            app.MapControllers();
+            
             app.MapStaticAssets();
             app.MapRazorComponents<App>()
                 .AddInteractiveServerRenderMode();
-
-            app.MapControllers();
 
             app.Run();
         }
