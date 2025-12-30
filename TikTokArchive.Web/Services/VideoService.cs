@@ -145,7 +145,6 @@ public class VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService
         string thumbnailDirectory = "/media/thumbnails";
         Directory.CreateDirectory(thumbnailDirectory);
 
-        // Step 1: Fetch metadata
 
         // Fetch metadata and download video
         Console.WriteLine($"Fetching metadata and downloading video for URL: {tiktokUrl}");
