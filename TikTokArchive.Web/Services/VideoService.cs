@@ -302,7 +302,12 @@ public class VideoService : IVideoService
             video.Creator = existingCreator;
         }
 
-        var outTpl = Path.Combine(videoDirectory, "%(id)s.%(ext)s");
+        var sanitizedVideoId = string.Concat(videoId.Where(c => char.IsLetterOrDigit(c) || c == '_' || c == '-'));
+        if (string.IsNullOrEmpty(sanitizedVideoId))
+        {
+            throw new Exception("Video ID is invalid or contains no valid characters.");
+        }
+        var outTpl = Path.Combine(videoDirectory, $"{sanitizedVideoId}.%(ext)s");
 
         var download = new ProcessStartInfo(tool)
         {
