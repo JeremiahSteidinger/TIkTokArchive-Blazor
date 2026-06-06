@@ -49,6 +49,17 @@ namespace TikTokArchive.Web
             builder.Services.AddHostedService<Services.SearchIndexBackgroundService>();
             builder.Services.AddHostedService<Services.SearchSyncBackgroundService>();
 
+            // Register transcription services
+            builder.Services.AddSingleton<Services.RabbitMQService>();
+            builder.Services.AddSingleton<Services.SpeechToTextProviderFactory>();
+            builder.Services.AddSingleton<Services.WhisperLocalProvider>();
+            builder.Services.AddSingleton<Services.OpenAIWhisperProvider>();
+            builder.Services.AddSingleton<Services.AzureSpeechProvider>();
+            builder.Services.AddScoped<Services.AudioExtractionService>();
+            builder.Services.AddScoped<Services.TranscriptionService>();
+            builder.Services.AddHostedService<Services.TranscriptionBackgroundService>();
+            builder.Services.AddHostedService<Services.LocalImportBackgroundService>();
+
             builder.Services.AddControllers();
             builder.Services.AddHttpClient();
 
@@ -67,6 +78,20 @@ namespace TikTokArchive.Web
                 // Initialize OpenSearch index
                 var searchService = app.Services.GetRequiredService<Services.ISearchService>();
                 searchService.InitializeAsync().Wait();
+
+                // Initialize RabbitMQ (if configured)
+                var rabbitMQService = app.Services.GetService<Services.RabbitMQService>();
+                if (rabbitMQService != null)
+                {
+                    rabbitMQService.InitializeAsync().Wait();
+                }
+
+                // Initialize STT provider factory (validates availability)
+                var sttFactory = app.Services.GetService<Services.SpeechToTextProviderFactory>();
+                if (sttFactory != null)
+                {
+                    sttFactory.GetProviderAsync().Wait();
+                }
             }
 
             // Configure the HTTP request pipeline.

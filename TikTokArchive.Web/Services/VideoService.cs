@@ -20,13 +20,23 @@ public class VideoService : IVideoService
     private readonly ILogger<VideoService> logger;
     private readonly SearchIndexQueue? searchIndexQueue;
     private readonly ISearchService? searchService;
+    private readonly RabbitMQService? rabbitMQService;
+    private readonly SpeechToTextProviderFactory? providerFactory;
 
-    public VideoService(TikTokArchiveDbContext dbContext, ILogger<VideoService> logger, SearchIndexQueue? searchIndexQueue = null, ISearchService? searchService = null)
+    public VideoService(
+        TikTokArchiveDbContext dbContext, 
+        ILogger<VideoService> logger, 
+        SearchIndexQueue? searchIndexQueue = null, 
+        ISearchService? searchService = null,
+        RabbitMQService? rabbitMQService = null,
+        SpeechToTextProviderFactory? providerFactory = null)
     {
         this.dbContext = dbContext;
         this.logger = logger;
         this.searchIndexQueue = searchIndexQueue;
         this.searchService = searchService;
+        this.rabbitMQService = rabbitMQService;
+        this.providerFactory = providerFactory;
     }
     public async Task<(List<Video> Videos, int TotalCount)> GetVideosAsync(int page = 1, int pageSize = 20, string? tagFilter = null, string? searchQuery = null, List<string>? searchFields = null)
     {
@@ -343,6 +353,32 @@ public class VideoService : IVideoService
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to queue search index operation for video {VideoId}", video.TikTokVideoId);
+        }
+
+        // Queue transcription if STT is enabled (non-blocking)
+        try
+        {
+            if (providerFactory != null && await providerFactory.IsEnabledAsync() && 
+                rabbitMQService != null && rabbitMQService.IsConnected)
+            {
+                var queueItem = new TranscriptionQueueItem
+                {
+                    VideoId = video.Id,
+                    Status = TranscriptionStatus.Pending,
+                    QueuedAt = DateTime.UtcNow,
+                    Provider = await providerFactory.GetConfiguredProviderTypeAsync()
+                };
+
+                dbContext.TranscriptionQueueItems.Add(queueItem);
+                await dbContext.SaveChangesAsync();
+
+                await rabbitMQService.PublishTranscriptionMessageAsync(video.Id, queueItem.Provider);
+                logger.LogInformation("Queued video {VideoId} for transcription", video.TikTokVideoId);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to queue transcription for video {VideoId}", video.TikTokVideoId);
         }
 
         logger.LogInformation($"Video with ID {video.TikTokVideoId} added successfully.");
