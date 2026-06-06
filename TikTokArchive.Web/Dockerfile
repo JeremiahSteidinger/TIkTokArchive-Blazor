@@ -7,7 +7,7 @@ EXPOSE 8080
 EXPOSE 8081
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 ca-certificates \
+ && apt-get install -y --no-install-recommends python3 ca-certificates ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
 # This stage is used to build the service project

@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TikTokArchive.Entities;
 
@@ -11,9 +12,11 @@ using TikTokArchive.Entities;
 namespace TikTokArchive.Entities.Migrations
 {
     [DbContext(typeof(TikTokArchiveDbContext))]
-    partial class TikTokArchiveDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251230233520_AddTranscriptionEntities")]
+    partial class AddTranscriptionEntities
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -46,40 +49,6 @@ namespace TikTokArchive.Entities.Migrations
                     b.ToTable("Creators");
                 });
 
-            modelBuilder.Entity("TikTokArchive.Entities.LocalImportLog", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime?>("DateCreatedUsed")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<string>("ErrorMessage")
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("FileName")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<DateTime>("ImportedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime(6)")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("int");
-
-                    b.Property<string>("VideoId")
-                        .HasColumnType("longtext");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("LocalImportLogs");
-                });
-
             modelBuilder.Entity("TikTokArchive.Entities.SearchIndexConfiguration", b =>
                 {
                     b.Property<int>("Id")
@@ -88,32 +57,13 @@ namespace TikTokArchive.Entities.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("AzureSpeechKey")
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("AzureSpeechRegion")
-                        .HasColumnType("longtext");
-
                     b.Property<DateTime>("LastModified")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime(6)")
                         .HasDefaultValueSql("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
 
-                    b.Property<string>("OpenAiApiKey")
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("SttProvider")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
                     b.Property<int>("SyncIntervalMinutes")
                         .HasColumnType("int");
-
-                    b.Property<string>("WhisperModel")
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("WhisperUrl")
-                        .HasColumnType("longtext");
 
                     b.HasKey("Id");
 

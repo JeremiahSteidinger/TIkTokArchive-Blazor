@@ -12,6 +12,7 @@ namespace TikTokArchive.Web.Services
         public string CreatorName { get; set; } = string.Empty;
         public string CreatorUsername { get; set; } = string.Empty;
         public List<string> Tags { get; set; } = new();
+        public string? TranscriptText { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTime AddedToApp { get; set; }
     }
@@ -87,6 +88,11 @@ namespace TikTokArchive.Web.Services
                             )
                             .Keyword(k => k.Name(n => n.CreatorUsername))
                             .Keyword(k => k.Name(n => n.Tags))
+                            .Text(t => t
+                                .Name(n => n.TranscriptText)
+                                .Analyzer("ngram_analyzer")
+                                .SearchAnalyzer("standard")
+                            )
                             .Date(d => d.Name(n => n.CreatedAt))
                             .Date(d => d.Name(n => n.AddedToApp))
                         )
@@ -114,6 +120,7 @@ namespace TikTokArchive.Web.Services
             {
                 var document = new VideoDocument
                 {
+                    TranscriptText = video.Transcript?.TranscriptText,
                     VideoId = video.TikTokVideoId,
                     Description = video.Description ?? string.Empty,
                     CreatorName = video.Creator?.DisplayName ?? string.Empty,
@@ -172,7 +179,7 @@ namespace TikTokArchive.Web.Services
 
                 if (fields == null || fields.Count == 0 || fields.Contains("all"))
                 {
-                    fields = new List<string> { "description", "creator", "tags" };
+                    fields = new List<string> { "description", "creator", "tags", "transcript" };
                 }
 
                 if (fields.Contains("description"))
@@ -208,6 +215,16 @@ namespace TikTokArchive.Web.Services
                     ));
                 }
 
+                if (fields.Contains("transcript"))
+                {
+                    shouldQueries.Add(q => q.Match(m => m
+                        .Field(f => f.TranscriptText)
+                        .Query(query)
+                        .Fuzziness(Fuzziness.Auto)
+                        .Boost(1.5)
+                    ));
+                }
+
                 var searchResponse = await _client.SearchAsync<VideoDocument>(s => s
                     .Query(q => q
                         .Bool(b => b
@@ -234,6 +251,7 @@ namespace TikTokArchive.Web.Services
                 var videos = await dbContext.Videos
                     .Include(v => v.Creator)
                     .Include(v => v.Tags).ThenInclude(vt => vt.Tag)
+                    .Include(v => v.Transcript)
                     .Where(v => videoIds.Contains(v.TikTokVideoId))
                     .ToListAsync();
 
@@ -300,6 +318,7 @@ namespace TikTokArchive.Web.Services
                     var videos = await dbContext.Videos
                         .Include(v => v.Creator)
                         .Include(v => v.Tags).ThenInclude(vt => vt.Tag)
+                        .Include(v => v.Transcript)
                         .OrderBy(v => v.Id)
                         .Skip(skip)
                         .Take(batchSize)
@@ -316,6 +335,7 @@ namespace TikTokArchive.Web.Services
                             CreatorName = video.Creator?.DisplayName ?? string.Empty,
                             CreatorUsername = video.Creator?.TikTokId ?? string.Empty,
                             Tags = video.Tags?.Select(vt => vt.Tag.Name).ToList() ?? new List<string>(),
+                            TranscriptText = video.Transcript?.TranscriptText,
                             CreatedAt = video.CreatedAt,
                             AddedToApp = video.AddedToApp
                         };
