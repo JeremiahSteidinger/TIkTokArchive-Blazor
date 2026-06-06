@@ -345,7 +345,10 @@ namespace TikTokArchive.Web.Controllers
 
             await _dbContext.SaveChangesAsync();
 
-            _logger.LogInformation("Transcription configuration updated: Provider={Provider}", config.SttProvider);
+            var safeProviderForLog = (config.SttProvider ?? "None")
+                .Replace("\r", string.Empty)
+                .Replace("\n", string.Empty);
+            _logger.LogInformation("Transcription configuration updated: Provider={Provider}", safeProviderForLog);
 
             return Ok(new { message = "Transcription configuration updated successfully" });
         }
