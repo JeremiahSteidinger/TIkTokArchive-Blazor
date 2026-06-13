@@ -10,6 +10,8 @@ services:
       - OpenSearch:Url=http://opensearch:9200
     volumes:
       - ./media:/media
+      # Drop video files here and the local import service will ingest them.
+      - ./dropfolder:/dropfolder
     depends_on:
       opensearch:
         condition: service_healthy

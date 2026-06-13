@@ -81,6 +81,9 @@ namespace TikTokArchive.Web
             builder.Services.AddSingleton<IYtDlpService, YtDlpService>();
             builder.Services.AddHostedService<VideoIngestBackgroundService>();
 
+            // Local import: watches a drop folder and imports video files found there.
+            builder.Services.AddHostedService<LocalImportBackgroundService>();
+
             builder.Services.AddControllers();
             builder.Services.AddHttpClient();
 

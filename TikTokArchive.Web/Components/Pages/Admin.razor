@@ -1,17 +1,19 @@
 @page "/admin"
-@rendermode InteractiveServer
 @using Microsoft.EntityFrameworkCore
 @using TikTokArchive.Entities
 @using TikTokArchive.Web.Services
 @inject TikTokArchiveDbContext DbContext
 @inject ReindexCoordinator ReindexCoordinator
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 @implements IDisposable
 
-<PageTitle>Admin - Search Configuration</PageTitle>
+<PageTitle>Admin - Configuration</PageTitle>
 
-<MudText Typo="Typo.h4" Class="mb-4">Search Index Administration</MudText>
+<MudText Typo="Typo.h4" Class="mb-4">Administration</MudText>
 
+<MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-4">
+<MudTabPanel Text="Search Index">
 <MudGrid>
     <MudItem xs="12" md="6">
         <MudPaper Class="pa-4">
@@ -131,6 +133,112 @@
         </MudPaper>
     </MudItem>
 </MudGrid>
+</MudTabPanel>
+
+<MudTabPanel Text="Local Import">
+    <MudGrid>
+        <MudItem xs="12">
+            <MudPaper Class="pa-4">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+                    <MudText Typo="Typo.h6" Style="flex:1">Import Log</MudText>
+                    <MudChip T="string" Color="Color.Success" Size="Size.Small">
+                        Success: @localImportSuccessCount
+                    </MudChip>
+                    <MudChip T="string" Color="Color.Error" Size="Size.Small">
+                        Failed: @localImportFailedCount
+                    </MudChip>
+                    <MudButton Variant="Variant.Text"
+                               StartIcon="@Icons.Material.Filled.Refresh"
+                               OnClick="LoadLocalImportLog">
+                        Refresh
+                    </MudButton>
+                </MudStack>
+
+                @if (localImportLogs.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                        No imports recorded yet. Drop video files into the drop folder to get started.
+                    </MudText>
+                }
+                else
+                {
+                    <MudTable Items="@localImportLogs" Dense="true" Hover="true" SortLabel="Sort By">
+                        <HeaderContent>
+                            <MudTh><MudTableSortLabel SortBy="new Func<LocalImportLog, object>(x => x.ImportedAt)">Imported At</MudTableSortLabel></MudTh>
+                            <MudTh><MudTableSortLabel SortBy="new Func<LocalImportLog, object>(x => x.FileName)">File Name</MudTableSortLabel></MudTh>
+                            <MudTh>Status</MudTh>
+                            <MudTh>Video ID</MudTh>
+                            <MudTh><MudTableSortLabel SortBy="new Func<LocalImportLog, object?>(x => x.DateCreatedUsed)">Date Created Used</MudTableSortLabel></MudTh>
+                            <MudTh>Error</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>@context.ImportedAt.ToLocalTime().ToString("g")</MudTd>
+                            <MudTd>
+                                <MudText Typo="Typo.body2" Style="word-break:break-all">@context.FileName</MudText>
+                            </MudTd>
+                            <MudTd>
+                                @if (context.Status == LocalImportStatus.Success)
+                                {
+                                    <MudChip T="string" Color="Color.Success" Size="Size.Small">Success</MudChip>
+                                }
+                                else
+                                {
+                                    <MudChip T="string" Color="Color.Error" Size="Size.Small">Failed</MudChip>
+                                }
+                            </MudTd>
+                            <MudTd>
+                                <MudText Typo="Typo.caption">@(context.VideoId ?? "—")</MudText>
+                            </MudTd>
+                            <MudTd>
+                                @if (context.DateCreatedUsed.HasValue)
+                                {
+                                    @if (context.DateCreatedUsed.Value.Year == 1970)
+                                    {
+                                        <MudStack Spacing="0">
+                                            <MudText Typo="Typo.body2" Color="Color.Warning">
+                                                <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" Class="mr-1" />
+                                                @context.DateCreatedUsed.Value.ToLocalTime().ToString("g")
+                                            </MudText>
+                                            <MudText Typo="Typo.caption" Color="Color.Warning">Fallback — file date unavailable</MudText>
+                                        </MudStack>
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.body2">@context.DateCreatedUsed.Value.ToLocalTime().ToString("g")</MudText>
+                                    }
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.body2">—</MudText>
+                                }
+                            </MudTd>
+                            <MudTd>
+                                @if (!string.IsNullOrEmpty(context.ErrorMessage))
+                                {
+                                    <MudButton Size="Size.Small"
+                                               Variant="Variant.Text"
+                                               Color="Color.Error"
+                                               StartIcon="@Icons.Material.Filled.ErrorOutline"
+                                               OnClick="() => ShowError(context.FileName, context.ErrorMessage!)">
+                                        View Error
+                                    </MudButton>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.body2">—</MudText>
+                                }
+                            </MudTd>
+                        </RowTemplate>
+                        <PagerContent>
+                            <MudTablePager />
+                        </PagerContent>
+                    </MudTable>
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+</MudTabPanel>
+</MudTabs>
 
 @code {
     private int syncIntervalMinutes = 30;
@@ -143,6 +251,11 @@
     private int pendingCount = 0;
     private int retryingCount = 0;
     private List<ErrorItem> recentErrors = new();
+
+    // Local Import
+    private List<LocalImportLog> localImportLogs = new();
+    private int localImportSuccessCount = 0;
+    private int localImportFailedCount = 0;
 
     private double ReindexPercentage => reindexStatus.TotalCount > 0
         ? reindexStatus.ProcessedCount * 100.0 / reindexStatus.TotalCount
@@ -158,6 +271,7 @@
 
         await LoadConfiguration();
         await LoadQueueStatus();
+        await LoadLocalImportLog();
     }
 
     private async Task LoadConfiguration()
@@ -280,6 +394,34 @@
         {
             Snackbar.Add($"Error loading queue status: {ex.Message}", Severity.Error);
         }
+    }
+
+    private async Task LoadLocalImportLog()
+    {
+        try
+        {
+            localImportLogs = await DbContext.LocalImportLogs
+                .OrderByDescending(l => l.ImportedAt)
+                .Take(200)
+                .ToListAsync();
+            localImportSuccessCount = localImportLogs.Count(l => l.Status == LocalImportStatus.Success);
+            localImportFailedCount  = localImportLogs.Count(l => l.Status == LocalImportStatus.Failed);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading import log: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ShowError(string fileName, string errorMessage)
+    {
+        var parameters = new DialogParameters
+        {
+            ["Title"]        = $"Import Error — {fileName}",
+            ["ErrorMessage"] = errorMessage
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true };
+        await DialogService.ShowAsync<TikTokArchive.Web.Components.Components.ImportErrorDialog>("Import Error", parameters, options);
     }
 
     public void Dispose()

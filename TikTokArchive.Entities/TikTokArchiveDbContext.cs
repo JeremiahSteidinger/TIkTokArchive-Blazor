@@ -10,6 +10,7 @@ namespace TikTokArchive.Entities
         public DbSet<VideoTag> VideoTags { get; set; }
         public DbSet<SearchIndexOperation> SearchIndexOperations { get; set; }
         public DbSet<SearchIndexConfiguration> SearchIndexConfigurations { get; set; }
+        public DbSet<LocalImportLog> LocalImportLogs { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -55,6 +56,11 @@ namespace TikTokArchive.Entities
             modelBuilder.Entity<SearchIndexConfiguration>()
                 .Property(s => s.LastModified)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+
+            // LocalImportLog - imported timestamp default
+            modelBuilder.Entity<LocalImportLog>()
+                .Property(l => l.ImportedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
         }
     }
 }
