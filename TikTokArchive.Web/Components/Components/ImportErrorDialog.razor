@@ -1,0 +1,29 @@
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">
+            <MudIcon Icon="@Icons.Material.Filled.ErrorOutline" Class="mr-2" Color="Color.Error" />
+            @Title
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudPaper Elevation="0" Class="pa-3" Style="background:#1e1e1e; border-radius:4px; max-height:400px; overflow-y:auto;">
+            <pre style="white-space:pre-wrap; word-break:break-all; font-size:0.8rem; color:#d4d4d4; margin:0;">@ErrorMessage</pre>
+        </MudPaper>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Default" OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter]
+    public string Title { get; set; } = "Import Error";
+
+    [Parameter]
+    public string ErrorMessage { get; set; } = string.Empty;
+
+    private void Close() => MudDialog.Close();
+}
