@@ -365,3 +365,4 @@ FodyWeavers.xsd
 # Docker Compose local overrides
 docker-compose.override.yml
 /TikTokArchive.Migration
+/TikTokArchive.Web/data

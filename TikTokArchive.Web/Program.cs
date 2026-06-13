@@ -1,8 +1,11 @@
 using Microsoft.EntityFrameworkCore;
+using OpenSearch.Client;
 using TikTokArchive.Entities;
 using TikTokArchive.Web.Components;
 using MudBlazor.Services;
-using TikTokArchive.Web.Middleware;
+using TikTokArchive.Web.HealthChecks;
+using TikTokArchive.Web.Options;
+using TikTokArchive.Web.Services;
 
 namespace TikTokArchive.Web
 {
@@ -41,16 +44,49 @@ namespace TikTokArchive.Web
                         maxRetryDelay: TimeSpan.FromSeconds(10),
                         errorNumbersToAdd: null)));
 
-            builder.Services.AddScoped<Services.IVideoService, Services.VideoService>();
+            builder.Services.Configure<MediaStorageOptions>(
+                builder.Configuration.GetSection(MediaStorageOptions.SectionName));
+            builder.Services.Configure<YtDlpOptions>(
+                builder.Configuration.GetSection(YtDlpOptions.SectionName));
 
-            // Register search services
-            builder.Services.AddSingleton<Services.ISearchService, Services.OpenSearchService>();
-            builder.Services.AddSingleton<Services.SearchIndexQueue>();
-            builder.Services.AddHostedService<Services.SearchIndexBackgroundService>();
-            builder.Services.AddHostedService<Services.SearchSyncBackgroundService>();
+            builder.Services.AddScoped<IVideoService, VideoService>();
+
+            // Search: OpenSearch client + service, and the outbox worker that applies
+            // queued SearchIndexOperations rows to the index.
+            builder.Services.AddSingleton<IOpenSearchClient>(sp =>
+            {
+                var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("OpenSearch");
+                var openSearchUrl = builder.Configuration.GetValue<string>("OpenSearch:Url") ?? "http://opensearch:9200";
+                var settings = new ConnectionSettings(new Uri(openSearchUrl))
+                    .DefaultIndex(OpenSearchService.IndexName)
+                    .DisableDirectStreaming()
+                    .OnRequestCompleted(details =>
+                    {
+                        if (!details.Success)
+                        {
+                            logger.LogError("OpenSearch request to {Method} {Uri} failed: {DebugInformation}",
+                                details.HttpMethod, details.Uri, details.DebugInformation);
+                        }
+                    });
+                return new OpenSearchClient(settings);
+            });
+            builder.Services.AddSingleton<ISearchService, OpenSearchService>();
+            builder.Services.AddSingleton<SearchIndexSignal>();
+            builder.Services.AddSingleton<ReindexCoordinator>();
+            builder.Services.AddHostedService<SearchIndexBackgroundService>();
+            builder.Services.AddHostedService<SearchSyncBackgroundService>();
+
+            // Video ingestion: downloads run in the background, off the UI circuit.
+            builder.Services.AddSingleton<VideoIngestQueue>();
+            builder.Services.AddSingleton<IYtDlpService, YtDlpService>();
+            builder.Services.AddHostedService<VideoIngestBackgroundService>();
 
             builder.Services.AddControllers();
             builder.Services.AddHttpClient();
+
+            builder.Services.AddHealthChecks()
+                .AddCheck<DatabaseHealthCheck>("mysql")
+                .AddCheck<OpenSearchHealthCheck>("opensearch");
 
             builder.Services.AddRazorComponents()
                 .AddInteractiveServerComponents();
@@ -63,10 +99,6 @@ namespace TikTokArchive.Web
             {
                 var dbContext = scope.ServiceProvider.GetRequiredService<TikTokArchiveDbContext>();
                 dbContext.Database.Migrate();
-
-                // Initialize OpenSearch index
-                var searchService = app.Services.GetRequiredService<Services.ISearchService>();
-                searchService.InitializeAsync().Wait();
             }
 
             // Configure the HTTP request pipeline.
@@ -83,7 +115,8 @@ namespace TikTokArchive.Web
 
             // Map controllers first before static files
             app.MapControllers();
-            
+            app.MapHealthChecks("/health");
+
             app.MapStaticAssets();
             app.MapRazorComponents<App>()
                 .AddInteractiveServerRenderMode();

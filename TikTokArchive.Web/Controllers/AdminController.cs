@@ -10,21 +10,14 @@ namespace TikTokArchive.Web.Controllers
     public class AdminController : ControllerBase
     {
         private readonly TikTokArchiveDbContext _dbContext;
-        private readonly ISearchService _searchService;
-        private readonly SearchIndexQueue _queue;
-        private readonly ILogger<AdminController> _logger;
-        private static readonly Dictionary<string, ReindexProgress> _reindexProgress = new();
+        private readonly ReindexCoordinator _reindexCoordinator;
 
         public AdminController(
             TikTokArchiveDbContext dbContext,
-            ISearchService searchService,
-            SearchIndexQueue queue,
-            ILogger<AdminController> logger)
+            ReindexCoordinator reindexCoordinator)
         {
             _dbContext = dbContext;
-            _searchService = searchService;
-            _queue = queue;
-            _logger = logger;
+            _reindexCoordinator = reindexCoordinator;
         }
 
         [HttpGet("config")]
@@ -64,79 +57,38 @@ namespace TikTokArchive.Web.Controllers
         }
 
         [HttpPost("reindex")]
-        public async Task<IActionResult> StartReindex()
+        public IActionResult StartReindex()
         {
-            var sessionId = Guid.NewGuid().ToString();
-            
-            _reindexProgress[sessionId] = new ReindexProgress
+            if (!_reindexCoordinator.TryStart())
             {
-                IsRunning = true,
-                ProcessedCount = 0,
-                TotalCount = await _dbContext.Videos.CountAsync(),
-                StartedAt = DateTime.UtcNow
-            };
-
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    var progress = new Progress<int>(count =>
-                    {
-                        if (_reindexProgress.ContainsKey(sessionId))
-                        {
-                            _reindexProgress[sessionId].ProcessedCount = count;
-                        }
-                    });
-
-                    await _searchService.BulkReindexAsync(progress);
-
-                    if (_reindexProgress.ContainsKey(sessionId))
-                    {
-                        _reindexProgress[sessionId].IsRunning = false;
-                        _reindexProgress[sessionId].CompletedAt = DateTime.UtcNow;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error during bulk reindex");
-                    if (_reindexProgress.ContainsKey(sessionId))
-                    {
-                        _reindexProgress[sessionId].IsRunning = false;
-                        _reindexProgress[sessionId].ErrorMessage = ex.Message;
-                    }
-                }
-            });
-
-            return Ok(new { sessionId });
-        }
-
-        [HttpGet("reindex/progress/{sessionId}")]
-        public IActionResult GetReindexProgress(string sessionId)
-        {
-            if (!_reindexProgress.ContainsKey(sessionId))
-            {
-                return NotFound();
+                return Conflict(new { message = "A reindex is already running" });
             }
 
-            var progress = _reindexProgress[sessionId];
+            return Accepted();
+        }
+
+        [HttpGet("reindex/progress")]
+        public IActionResult GetReindexProgress()
+        {
+            var status = _reindexCoordinator.Status;
             return Ok(new
             {
-                isRunning = progress.IsRunning,
-                processedCount = progress.ProcessedCount,
-                totalCount = progress.TotalCount,
-                percentage = progress.TotalCount > 0 ? (progress.ProcessedCount * 100.0 / progress.TotalCount) : 0,
-                startedAt = progress.StartedAt,
-                completedAt = progress.CompletedAt,
-                errorMessage = progress.ErrorMessage
+                isRunning = status.IsRunning,
+                processedCount = status.ProcessedCount,
+                totalCount = status.TotalCount,
+                percentage = status.TotalCount > 0 ? (status.ProcessedCount * 100.0 / status.TotalCount) : 0,
+                startedAt = status.StartedAt,
+                completedAt = status.CompletedAt,
+                errorMessage = status.ErrorMessage
             });
         }
 
         [HttpGet("queue/status")]
         public async Task<IActionResult> GetQueueStatus()
         {
-            var pendingCount = await _queue.GetPendingCountAsync();
+            var pendingCount = await _dbContext.SearchIndexOperations.CountAsync();
             var recentErrors = await _dbContext.SearchIndexOperations
-                .Where(o => o.RetryCount >= 3)
+                .Where(o => o.RetryCount > 0)
                 .OrderByDescending(o => o.LastAttempt)
                 .Take(10)
                 .Select(o => new
@@ -160,15 +112,5 @@ namespace TikTokArchive.Web.Controllers
     public class UpdateConfigRequest
     {
         public int SyncIntervalMinutes { get; set; }
-    }
-
-    public class ReindexProgress
-    {
-        public bool IsRunning { get; set; }
-        public int ProcessedCount { get; set; }
-        public int TotalCount { get; set; }
-        public DateTime StartedAt { get; set; }
-        public DateTime? CompletedAt { get; set; }
-        public string? ErrorMessage { get; set; }
     }
 }

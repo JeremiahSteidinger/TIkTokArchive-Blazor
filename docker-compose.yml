@@ -11,7 +11,8 @@ services:
     volumes:
       - ./media:/media
     depends_on:
-      - opensearch
+      opensearch:
+        condition: service_healthy
 
   opensearch:
     image: opensearchproject/opensearch:2
@@ -23,7 +24,12 @@ services:
       - "9200:9200"
     volumes:
       - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
 
 volumes:
   opensearch_data:
-

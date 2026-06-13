@@ -1,13 +1,15 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
+using Microsoft.Extensions.Options;
 using TikTokArchive.Entities;
+using TikTokArchive.Web.Options;
 using TikTokArchive.Web.Services;
 
 namespace TikTokArchive.Web.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    public class VideoController(IVideoService videoService, ILogger<VideoController> logger) : ControllerBase
+    public class VideoController(IVideoService videoService, VideoIngestQueue ingestQueue, IOptions<MediaStorageOptions> mediaOptions, ILogger<VideoController> logger) : ControllerBase
     {
         [HttpGet("{id}/download")]
         public async Task<IActionResult> Download(string id)
@@ -18,12 +20,12 @@ namespace TikTokArchive.Web.Controllers
                 return BadRequest("Invalid video ID");
             }
 
-            var videoDirectory = "/media/videos";
-            
+            var videoDirectory = mediaOptions.Value.VideosPath;
+
             // Try common video extensions without searching entire directory
             var possibleExtensions = new[] { ".mp4", ".webm", ".mov", ".avi" };
             string? filePath = null;
-            
+
             foreach (var ext in possibleExtensions)
             {
                 var testPath = Path.Combine(videoDirectory, $"{id}{ext}");
@@ -71,8 +73,8 @@ namespace TikTokArchive.Web.Controllers
             // Sanitize ID for safe logging (defense in depth against log forging)
             var safeId = id.Replace("\r", string.Empty).Replace("\n", string.Empty);
 
-            var videoDirectory = "/media/videos";
-            
+            var videoDirectory = mediaOptions.Value.VideosPath;
+
             // Try common video extensions without searching entire directory
             var possibleExtensions = new[] { ".mp4", ".webm", ".mov", ".avi" };
             string? filePath = null;
@@ -123,7 +125,7 @@ namespace TikTokArchive.Web.Controllers
                 return BadRequest("Invalid video ID");
             }
 
-            var thumbnailDirectory = "/media/thumbnails";
+            var thumbnailDirectory = mediaOptions.Value.ThumbnailsPath;
             
             // Try common image extensions
             var possibleExtensions = new[] { ".jpg", ".jpeg", ".png", ".webp" };
@@ -180,18 +182,75 @@ namespace TikTokArchive.Web.Controllers
             }
         }
 
-        public async Task<IActionResult> Post([FromQuery] string videoUrl)
+        // Bounded so callers like iOS Shortcuts get a response before their own
+        // request timeout; jobs still running past this point report via the
+        // status endpoint instead.
+        private static readonly TimeSpan SynchronousWaitLimit = TimeSpan.FromSeconds(60);
+
+        /// <summary>
+        /// Queues a video for download. By default waits (up to a limit) for the
+        /// download to finish and reports the real outcome, so simple callers like an
+        /// iOS Shortcut see failures. Pass wait=false for fire-and-forget.
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> Post([FromQuery] string videoUrl, [FromQuery] bool wait = true)
         {
+            IngestJob job;
             try
             {
-                await videoService.AddVideo(videoUrl);
-                return Ok();
+                job = ingestQueue.Enqueue(videoUrl);
             }
-            catch (Exception ex)
+            catch (ArgumentException ex)
             {
-                logger.LogError($"Error adding video {videoUrl}: {ex.Message}");
-                return StatusCode(500, $"Error adding video: {ex.Message}");
+                return BadRequest(ex.Message);
             }
+
+            if (wait)
+            {
+                try
+                {
+                    await job.Completion.WaitAsync(SynchronousWaitLimit, HttpContext.RequestAborted);
+                }
+                catch (TimeoutException)
+                {
+                    // Still downloading — fall through and report the in-progress state.
+                }
+                catch (OperationCanceledException)
+                {
+                    // Caller gave up; the job keeps running. The response goes nowhere.
+                }
+            }
+
+            if (job.Status == IngestJobStatus.Failed)
+            {
+                return UnprocessableEntity(ToResponse(job));
+            }
+
+            return job.Status == IngestJobStatus.Completed
+                ? Ok(ToResponse(job))
+                : AcceptedAtAction(nameof(GetIngestStatus), new { jobId = job.Id }, ToResponse(job));
         }
+
+        [HttpGet("ingest/{jobId:guid}")]
+        public IActionResult GetIngestStatus(Guid jobId)
+        {
+            var job = ingestQueue.GetJob(jobId);
+            if (job == null)
+            {
+                return NotFound("Unknown or expired job ID");
+            }
+
+            return Ok(ToResponse(job));
+        }
+
+        private static object ToResponse(IngestJob job) => new
+        {
+            jobId = job.Id,
+            status = job.Status.ToString(),
+            videoId = job.VideoId,
+            error = job.Error,
+            queuedAt = job.QueuedAt,
+            completedAt = job.CompletedAt
+        };
     }
 }

@@ -4,9 +4,9 @@
 @using TikTokArchive.Entities
 @using TikTokArchive.Web.Services
 @inject TikTokArchiveDbContext DbContext
-@inject ISearchService SearchService
+@inject ReindexCoordinator ReindexCoordinator
 @inject ISnackbar Snackbar
-@inject NavigationManager Navigation
+@implements IDisposable
 
 <PageTitle>Admin - Search Configuration</PageTitle>
 
@@ -16,14 +16,14 @@
     <MudItem xs="12" md="6">
         <MudPaper Class="pa-4">
             <MudText Typo="Typo.h6" Class="mb-3">Configuration</MudText>
-            
+
             <MudNumericField @bind-Value="syncIntervalMinutes"
                              Label="Sync Interval (minutes)"
                              Min="1"
                              Max="1440"
                              Variant="Variant.Outlined"
                              Class="mb-3" />
-            
+
             <MudButton Variant="Variant.Filled"
                        Color="Color.Primary"
                        OnClick="SaveConfiguration"
@@ -34,7 +34,7 @@
                 }
                 Save Configuration
             </MudButton>
-            
+
             @if (configLastModified.HasValue)
             {
                 <MudText Typo="Typo.caption" Class="mt-2">
@@ -43,66 +43,65 @@
             }
         </MudPaper>
     </MudItem>
-    
+
     <MudItem xs="12" md="6">
         <MudPaper Class="pa-4">
             <MudText Typo="Typo.h6" Class="mb-3">Bulk Reindex</MudText>
-            
+
             <MudText Typo="Typo.body2" Class="mb-3">
                 Rebuild the entire search index from the database. This may take several minutes.
             </MudText>
-            
+
             <MudButton Variant="Variant.Filled"
                        Color="Color.Secondary"
                        OnClick="StartReindex"
-                       Disabled="isReindexing">
-                @if (isReindexing)
+                       Disabled="reindexStatus.IsRunning">
+                @if (reindexStatus.IsRunning)
                 {
                     <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
                 }
                 Start Bulk Reindex
             </MudButton>
-            
-            @if (isReindexing && reindexProgress != null)
+
+            @if (reindexStatus.IsRunning)
             {
                 <div class="mt-4">
                     <MudText Typo="Typo.body2" Class="mb-2">
-                        Progress: @reindexProgress.ProcessedCount / @reindexProgress.TotalCount
-                        (@reindexProgress.Percentage.ToString("F1")%)
+                        Progress: @reindexStatus.ProcessedCount / @reindexStatus.TotalCount
+                        (@ReindexPercentage.ToString("F1")%)
                     </MudText>
-                    <MudProgressLinear Color="Color.Primary" 
-                                       Value="@reindexProgress.Percentage" 
+                    <MudProgressLinear Color="Color.Primary"
+                                       Value="@ReindexPercentage"
                                        Size="Size.Large" />
                 </div>
             }
-            
-            @if (!string.IsNullOrEmpty(reindexErrorMessage))
+
+            @if (!string.IsNullOrEmpty(reindexStatus.ErrorMessage))
             {
-                <MudAlert Severity="Severity.Error" Class="mt-3">@reindexErrorMessage</MudAlert>
+                <MudAlert Severity="Severity.Error" Class="mt-3">@reindexStatus.ErrorMessage</MudAlert>
             }
-            
-            @if (reindexCompletedAt.HasValue)
+            else if (reindexStatus.CompletedAt.HasValue)
             {
                 <MudAlert Severity="Severity.Success" Class="mt-3">
-                    Reindex completed at @reindexCompletedAt.Value.ToLocalTime().ToString("g")
+                    Reindex completed at @reindexStatus.CompletedAt.Value.ToLocalTime().ToString("g")
                 </MudAlert>
             }
         </MudPaper>
     </MudItem>
-    
+
     <MudItem xs="12">
         <MudPaper Class="pa-4">
             <MudText Typo="Typo.h6" Class="mb-3">Queue Status</MudText>
-            
+
             <MudStack Row="true" Spacing="4" Class="mb-3">
                 <MudChip T="string" Color="Color.Info">
                     Pending Operations: @pendingCount
                 </MudChip>
                 <MudChip T="string" Color="Color.Error">
-                    Failed Operations: @failedCount
+                    Retrying Operations: @retryingCount
                 </MudChip>
             </MudStack>
-            
+
             @if (recentErrors.Any())
             {
                 <MudText Typo="Typo.subtitle2" Class="mb-2">Recent Errors:</MudText>
@@ -121,8 +120,8 @@
                         <MudTd>@context.LastAttempt?.ToLocalTime().ToString("g")</MudTd>
                         <MudTd>
                             <MudText Typo="Typo.caption">
-                                @(context.ErrorMessage?.Length > 50 
-                                    ? context.ErrorMessage.Substring(0, 50) + "..." 
+                                @(context.ErrorMessage?.Length > 50
+                                    ? context.ErrorMessage.Substring(0, 50) + "..."
                                     : context.ErrorMessage)
                             </MudText>
                         </MudTd>
@@ -137,19 +136,26 @@
     private int syncIntervalMinutes = 30;
     private DateTime? configLastModified;
     private bool isSavingConfig = false;
-    
-    private bool isReindexing = false;
-    private string? reindexSessionId;
-    private ReindexProgressData? reindexProgress;
-    private string? reindexErrorMessage;
-    private DateTime? reindexCompletedAt;
-    
+
+    private ReindexStatus reindexStatus = new();
+    private System.Timers.Timer? reindexPollTimer;
+
     private int pendingCount = 0;
-    private int failedCount = 0;
+    private int retryingCount = 0;
     private List<ErrorItem> recentErrors = new();
+
+    private double ReindexPercentage => reindexStatus.TotalCount > 0
+        ? reindexStatus.ProcessedCount * 100.0 / reindexStatus.TotalCount
+        : 0;
 
     protected override async Task OnInitializedAsync()
     {
+        reindexStatus = ReindexCoordinator.Status;
+        if (reindexStatus.IsRunning)
+        {
+            StartReindexPolling();
+        }
+
         await LoadConfiguration();
         await LoadQueueStatus();
     }
@@ -189,7 +195,7 @@
             {
                 config.SyncIntervalMinutes = syncIntervalMinutes;
             }
-            
+
             await DbContext.SaveChangesAsync();
             Snackbar.Add("Configuration saved successfully", Severity.Success);
             await LoadConfiguration();
@@ -204,80 +210,50 @@
         }
     }
 
-    private async Task StartReindex()
+    private void StartReindex()
     {
-        isReindexing = true;
-        reindexErrorMessage = null;
-        reindexCompletedAt = null;
-        reindexSessionId = Guid.NewGuid().ToString();
-        
-        // Initialize progress
-        var totalVideos = await DbContext.Videos.CountAsync();
-        reindexProgress = new ReindexProgressData
+        if (!ReindexCoordinator.TryStart())
         {
-            IsRunning = true,
-            ProcessedCount = 0,
-            TotalCount = totalVideos,
-            Percentage = 0,
-            StartedAt = DateTime.UtcNow
-        };
-        
-        try
+            Snackbar.Add("A reindex is already running", Severity.Warning);
+        }
+
+        reindexStatus = ReindexCoordinator.Status;
+        StartReindexPolling();
+    }
+
+    private void StartReindexPolling()
+    {
+        if (reindexPollTimer != null) return;
+
+        reindexPollTimer = new System.Timers.Timer(1000);
+        reindexPollTimer.Elapsed += async (sender, args) => await InvokeAsync(RefreshReindexStatusAsync);
+        reindexPollTimer.Start();
+    }
+
+    private async Task RefreshReindexStatusAsync()
+    {
+        var previous = reindexStatus;
+        reindexStatus = ReindexCoordinator.Status;
+
+        if (previous.IsRunning && !reindexStatus.IsRunning)
         {
-            // Start the reindex in a background task
-            _ = Task.Run(async () =>
+            reindexPollTimer?.Stop();
+            reindexPollTimer?.Dispose();
+            reindexPollTimer = null;
+
+            if (string.IsNullOrEmpty(reindexStatus.ErrorMessage))
             {
-                try
-                {
-                    var progress = new Progress<int>(processedCount =>
-                    {
-                        reindexProgress = new ReindexProgressData
-                        {
-                            IsRunning = true,
-                            ProcessedCount = processedCount,
-                            TotalCount = totalVideos,
-                            Percentage = totalVideos > 0 ? (processedCount * 100.0 / totalVideos) : 0,
-                            StartedAt = reindexProgress.StartedAt
-                        };
-                        InvokeAsync(StateHasChanged);
-                    });
-                    
-                    await SearchService.BulkReindexAsync(progress, CancellationToken.None);
-                    
-                    reindexProgress = new ReindexProgressData
-                    {
-                        IsRunning = false,
-                        ProcessedCount = totalVideos,
-                        TotalCount = totalVideos,
-                        Percentage = 100,
-                        StartedAt = reindexProgress.StartedAt,
-                        CompletedAt = DateTime.UtcNow
-                    };
-                    isReindexing = false;
-                    reindexCompletedAt = DateTime.UtcNow;
-                    await InvokeAsync(() =>
-                    {
-                        Snackbar.Add("Reindex completed successfully", Severity.Success);
-                        StateHasChanged();
-                    });
-                }
-                catch (Exception ex)
-                {
-                    reindexErrorMessage = ex.Message;
-                    isReindexing = false;
-                    await InvokeAsync(() =>
-                    {
-                        Snackbar.Add($"Reindex failed: {ex.Message}", Severity.Error);
-                        StateHasChanged();
-                    });
-                }
-            });
+                Snackbar.Add("Reindex completed successfully", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add($"Reindex failed: {reindexStatus.ErrorMessage}", Severity.Error);
+            }
+
+            await LoadQueueStatus();
         }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Error starting reindex: {ex.Message}", Severity.Error);
-            isReindexing = false;
-        }
+
+        StateHasChanged();
     }
 
     private async Task LoadQueueStatus()
@@ -285,8 +261,9 @@
         try
         {
             pendingCount = await DbContext.SearchIndexOperations.CountAsync();
+            retryingCount = await DbContext.SearchIndexOperations.CountAsync(o => o.RetryCount > 0);
             recentErrors = await DbContext.SearchIndexOperations
-                .Where(o => o.RetryCount >= 3)
+                .Where(o => o.RetryCount > 0)
                 .OrderByDescending(o => o.LastAttempt)
                 .Take(10)
                 .Select(o => new ErrorItem
@@ -298,23 +275,16 @@
                     ErrorMessage = o.ErrorMessage
                 })
                 .ToListAsync();
-            failedCount = recentErrors.Count;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error loading queue status: {ex.Message}");
+            Snackbar.Add($"Error loading queue status: {ex.Message}", Severity.Error);
         }
     }
 
-    private class ReindexProgressData
+    public void Dispose()
     {
-        public bool IsRunning { get; set; }
-        public int ProcessedCount { get; set; }
-        public int TotalCount { get; set; }
-        public double Percentage { get; set; }
-        public DateTime StartedAt { get; set; }
-        public DateTime? CompletedAt { get; set; }
-        public string? ErrorMessage { get; set; }
+        reindexPollTimer?.Dispose();
     }
 
     private class ErrorItem
