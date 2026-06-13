@@ -1,4 +1,3 @@
-using Microsoft.EntityFrameworkCore;
 using OpenSearch.Client;
 using OpenSearch.Net;
 using TikTokArchive.Entities;
@@ -12,48 +11,64 @@ namespace TikTokArchive.Web.Services
         public string CreatorName { get; set; } = string.Empty;
         public string CreatorUsername { get; set; } = string.Empty;
         public List<string> Tags { get; set; } = new();
-        public string? TranscriptText { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTime AddedToApp { get; set; }
+
+        public static VideoDocument FromVideo(Video video) => new()
+        {
+            VideoId = video.TikTokVideoId,
+            Description = video.Description ?? string.Empty,
+            CreatorName = video.Creator?.DisplayName ?? string.Empty,
+            CreatorUsername = video.Creator?.TikTokId ?? string.Empty,
+            Tags = video.Tags?.Select(vt => vt.Tag.Name).ToList() ?? new List<string>(),
+            CreatedAt = video.CreatedAt,
+            AddedToApp = video.AddedToApp
+        };
     }
 
     public class OpenSearchService : ISearchService
     {
+        // v2: tags and usernames are ngram-analyzed text (previously keyword + wildcard
+        // queries). A new name lets the corrected mapping apply without migrating the old
+        // index; the sync service repopulates it from the database.
+        public const string IndexName = "tiktok_videos_v2";
+
         private readonly IOpenSearchClient _client;
-        private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<OpenSearchService> _logger;
-        private const string IndexName = "tiktok_videos";
+        private readonly SemaphoreSlim _indexInitLock = new(1, 1);
+        private volatile bool _indexEnsured;
 
-        public OpenSearchService(IConfiguration configuration, IServiceProvider serviceProvider, ILogger<OpenSearchService> logger)
+        public OpenSearchService(IOpenSearchClient client, ILogger<OpenSearchService> logger)
         {
-            _serviceProvider = serviceProvider;
+            _client = client;
             _logger = logger;
-
-            var openSearchUrl = configuration.GetValue<string>("OpenSearch:Url") ?? "http://opensearch:9200";
-            var settings = new ConnectionSettings(new Uri(openSearchUrl))
-                .DefaultIndex(IndexName)
-                .DisableDirectStreaming()
-                .OnRequestCompleted(details =>
-                {
-                    if (!details.Success)
-                    {
-                        _logger.LogError("OpenSearch request to {Method} {Uri} failed: {DebugInformation}",
-                            details.HttpMethod, details.Uri, details.DebugInformation);
-                    }
-                });
-
-            _client = new OpenSearchClient(settings);
         }
 
-        public async Task InitializeAsync()
+        // The index must never be auto-created by a stray write: dynamic mapping would lack
+        // the ngram analyzer and silently break substring search. Every operation funnels
+        // through here so the first one to reach OpenSearch creates it correctly, and a
+        // failure surfaces to the caller (the outbox worker retries) instead of being
+        // swallowed at startup.
+        private async Task EnsureIndexAsync(CancellationToken cancellationToken)
         {
+            if (_indexEnsured) return;
+
+            await _indexInitLock.WaitAsync(cancellationToken);
             try
             {
-                var existsResponse = await _client.Indices.ExistsAsync(IndexName);
+                if (_indexEnsured) return;
+
+                var existsResponse = await _client.Indices.ExistsAsync(IndexName, ct: cancellationToken);
                 if (existsResponse.Exists)
                 {
-                    _logger.LogInformation("OpenSearch index {IndexName} already exists", IndexName);
+                    _indexEnsured = true;
                     return;
+                }
+
+                if (existsResponse.OriginalException != null)
+                {
+                    throw new InvalidOperationException(
+                        $"Could not reach OpenSearch to check index {IndexName}", existsResponse.OriginalException);
                 }
 
                 var createResponse = await _client.Indices.CreateAsync(IndexName, c => c
@@ -86,100 +101,114 @@ namespace TikTokArchive.Web.Services
                                 .Analyzer("ngram_analyzer")
                                 .SearchAnalyzer("standard")
                             )
-                            .Keyword(k => k.Name(n => n.CreatorUsername))
-                            .Keyword(k => k.Name(n => n.Tags))
                             .Text(t => t
-                                .Name(n => n.TranscriptText)
+                                .Name(n => n.CreatorUsername)
                                 .Analyzer("ngram_analyzer")
                                 .SearchAnalyzer("standard")
+                                .Fields(f => f.Keyword(k => k.Name("raw")))
+                            )
+                            .Text(t => t
+                                .Name(n => n.Tags)
+                                .Analyzer("ngram_analyzer")
+                                .SearchAnalyzer("standard")
+                                .Fields(f => f.Keyword(k => k.Name("raw")))
                             )
                             .Date(d => d.Name(n => n.CreatedAt))
                             .Date(d => d.Name(n => n.AddedToApp))
                         )
-                    )
-                );
+                    ), cancellationToken);
 
-                if (createResponse.IsValid)
+                if (!createResponse.IsValid &&
+                    createResponse.ServerError?.Error?.Type != "resource_already_exists_exception")
                 {
-                    _logger.LogInformation("OpenSearch index {IndexName} created successfully", IndexName);
+                    throw new InvalidOperationException(
+                        $"Failed to create OpenSearch index {IndexName}: {createResponse.DebugInformation}");
                 }
-                else
-                {
-                    _logger.LogError("Failed to create OpenSearch index: {Error}", createResponse.DebugInformation);
-                }
+
+                _logger.LogInformation("OpenSearch index {IndexName} is ready", IndexName);
+                _indexEnsured = true;
             }
-            catch (Exception ex)
+            finally
             {
-                _logger.LogError(ex, "Error initializing OpenSearch index");
+                _indexInitLock.Release();
             }
         }
 
-        public async Task IndexVideoAsync(Video video)
+        public async Task IndexVideoAsync(Video video, CancellationToken cancellationToken = default)
         {
-            try
+            await EnsureIndexAsync(cancellationToken);
+
+            var document = VideoDocument.FromVideo(video);
+            var response = await _client.IndexAsync(document, i => i
+                .Id(video.TikTokVideoId)
+                .Refresh(Refresh.False), cancellationToken);
+
+            if (!response.IsValid)
             {
-                var document = new VideoDocument
-                {
-                    TranscriptText = video.Transcript?.TranscriptText,
-                    VideoId = video.TikTokVideoId,
-                    Description = video.Description ?? string.Empty,
-                    CreatorName = video.Creator?.DisplayName ?? string.Empty,
-                    CreatorUsername = video.Creator?.TikTokId ?? string.Empty,
-                    Tags = video.Tags?.Select(vt => vt.Tag.Name).ToList() ?? new List<string>(),
-                    CreatedAt = video.CreatedAt,
-                    AddedToApp = video.AddedToApp
-                };
-
-                var response = await _client.IndexAsync(document, i => i
-                    .Id(video.TikTokVideoId)
-                    .Refresh(Refresh.False)
-                );
-
-                if (!response.IsValid)
-                {
-                    throw new Exception($"Failed to index video: {response.DebugInformation}");
-                }
-
-                _logger.LogDebug("Successfully indexed video {VideoId}", video.TikTokVideoId);
+                throw new InvalidOperationException(
+                    $"Failed to index video {video.TikTokVideoId}: {response.DebugInformation}");
             }
-            catch (Exception ex)
+
+            _logger.LogDebug("Indexed video {VideoId}", video.TikTokVideoId);
+        }
+
+        public async Task IndexVideosAsync(IReadOnlyCollection<Video> videos, CancellationToken cancellationToken = default)
+        {
+            if (videos.Count == 0) return;
+
+            await EnsureIndexAsync(cancellationToken);
+
+            var bulkDescriptor = new BulkDescriptor();
+            foreach (var video in videos)
             {
-                _logger.LogError(ex, "Error indexing video {VideoId}", video.TikTokVideoId);
-                throw;
+                var document = VideoDocument.FromVideo(video);
+                bulkDescriptor.Index<VideoDocument>(i => i
+                    .Document(document)
+                    .Id(document.VideoId));
+            }
+
+            var bulkResponse = await _client.BulkAsync(bulkDescriptor, cancellationToken);
+
+            if (!bulkResponse.IsValid)
+            {
+                throw new InvalidOperationException($"Bulk index failed: {bulkResponse.DebugInformation}");
+            }
+
+            if (bulkResponse.Errors)
+            {
+                var failedIds = bulkResponse.ItemsWithErrors.Select(i => i.Id).ToList();
+                throw new InvalidOperationException(
+                    $"Bulk index reported errors for {failedIds.Count} videos: {string.Join(", ", failedIds.Take(5))}");
             }
         }
 
-        public async Task DeleteVideoAsync(string videoId)
+        public async Task DeleteVideoAsync(string videoId, CancellationToken cancellationToken = default)
         {
-            try
-            {
-                var response = await _client.DeleteAsync<VideoDocument>(videoId, d => d
-                    .Refresh(Refresh.False)
-                );
+            await EnsureIndexAsync(cancellationToken);
 
-                if (!response.IsValid && response.Result != Result.NotFound)
-                {
-                    throw new Exception($"Failed to delete video from index: {response.DebugInformation}");
-                }
+            var response = await _client.DeleteAsync<VideoDocument>(videoId, d => d
+                .Refresh(Refresh.False), cancellationToken);
 
-                _logger.LogDebug("Successfully deleted video {VideoId} from index", videoId);
-            }
-            catch (Exception ex)
+            if (!response.IsValid && response.Result != Result.NotFound)
             {
-                _logger.LogError(ex, "Error deleting video {VideoId} from index", videoId);
-                throw;
+                throw new InvalidOperationException(
+                    $"Failed to delete video {videoId} from index: {response.DebugInformation}");
             }
+
+            _logger.LogDebug("Deleted video {VideoId} from index", videoId);
         }
 
-        public async Task<SearchResult> SearchAsync(string query, int page, int pageSize, List<string>? fields = null)
+        public async Task<SearchResult> SearchAsync(string query, int page, int pageSize, List<string>? fields = null, CancellationToken cancellationToken = default)
         {
             try
             {
+                await EnsureIndexAsync(cancellationToken);
+
                 var shouldQueries = new List<Func<QueryContainerDescriptor<VideoDocument>, QueryContainer>>();
 
                 if (fields == null || fields.Count == 0 || fields.Contains("all"))
                 {
-                    fields = new List<string> { "description", "creator", "tags", "transcript" };
+                    fields = new List<string> { "description", "creator", "tags" };
                 }
 
                 if (fields.Contains("description"))
@@ -187,7 +216,6 @@ namespace TikTokArchive.Web.Services
                     shouldQueries.Add(q => q.Match(m => m
                         .Field(f => f.Description)
                         .Query(query)
-                        .Fuzziness(Fuzziness.Auto)
                         .Boost(2.0)
                     ));
                 }
@@ -197,31 +225,21 @@ namespace TikTokArchive.Web.Services
                     shouldQueries.Add(q => q.Match(m => m
                         .Field(f => f.CreatorName)
                         .Query(query)
-                        .Fuzziness(Fuzziness.Auto)
                         .Boost(1.5)
                     ));
-                    shouldQueries.Add(q => q.Wildcard(w => w
+                    shouldQueries.Add(q => q.Match(m => m
                         .Field(f => f.CreatorUsername)
-                        .Value($"*{query.ToLower()}*")
+                        .Query(query)
+                        .Boost(1.5)
                     ));
                 }
 
                 if (fields.Contains("tags"))
                 {
-                    shouldQueries.Add(q => q.Wildcard(w => w
-                        .Field(f => f.Tags)
-                        .Value($"*{query.ToLower()}*")
-                        .Boost(1.0)
-                    ));
-                }
-
-                if (fields.Contains("transcript"))
-                {
                     shouldQueries.Add(q => q.Match(m => m
-                        .Field(f => f.TranscriptText)
+                        .Field(f => f.Tags)
                         .Query(query)
-                        .Fuzziness(Fuzziness.Auto)
-                        .Boost(1.5)
+                        .Boost(1.0)
                     ));
                 }
 
@@ -232,139 +250,73 @@ namespace TikTokArchive.Web.Services
                             .MinimumShouldMatch(1)
                         )
                     )
-                    .Sort(sort => sort.Descending(d => d.AddedToApp))
+                    .Sort(sort => sort
+                        .Descending(SortSpecialField.Score)
+                        .Descending(d => d.AddedToApp))
+                    .Source(src => src.Includes(i => i.Field(f => f.VideoId)))
                     .From((page - 1) * pageSize)
-                    .Size(pageSize)
-                );
+                    .Size(pageSize), cancellationToken);
 
                 if (!searchResponse.IsValid)
                 {
                     _logger.LogError("Search failed: {Error}", searchResponse.DebugInformation);
-                    return new SearchResult { Videos = new List<Video>(), TotalCount = 0 };
+                    return new SearchResult();
                 }
-
-                var videoIds = searchResponse.Documents.Select(d => d.VideoId).ToList();
-
-                using var scope = _serviceProvider.CreateScope();
-                var dbContext = scope.ServiceProvider.GetRequiredService<TikTokArchiveDbContext>();
-
-                var videos = await dbContext.Videos
-                    .Include(v => v.Creator)
-                    .Include(v => v.Tags).ThenInclude(vt => vt.Tag)
-                    .Include(v => v.Transcript)
-                    .Where(v => videoIds.Contains(v.TikTokVideoId))
-                    .ToListAsync();
-
-                var orderedVideos = videoIds
-                    .Select(id => videos.FirstOrDefault(v => v.TikTokVideoId == id))
-                    .Where(v => v != null)
-                    .Cast<Video>()
-                    .ToList();
 
                 return new SearchResult
                 {
-                    Videos = orderedVideos,
-                    TotalCount = (int)searchResponse.Total
+                    VideoIds = searchResponse.Documents.Select(d => d.VideoId).ToList(),
+                    TotalCount = searchResponse.Total
                 };
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error performing search for query: {Query}", query);
-                return new SearchResult { Videos = new List<Video>(), TotalCount = 0 };
+                return new SearchResult();
             }
         }
 
-        public async Task<List<string>> GetIndexedVideoIdsAsync()
+        public async Task<List<string>> GetIndexedVideoIdsAsync(CancellationToken cancellationToken = default)
         {
+            await EnsureIndexAsync(cancellationToken);
+
+            var ids = new List<string>();
+            const string scrollTimeout = "2m";
+
+            var response = await _client.SearchAsync<VideoDocument>(s => s
+                .Size(1000)
+                .Scroll(scrollTimeout)
+                .Source(src => src.Includes(i => i.Field(f => f.VideoId))), cancellationToken);
+
             try
             {
-                var searchResponse = await _client.SearchAsync<VideoDocument>(s => s
-                    .Size(10000)
-                    .Source(src => src.Includes(i => i.Field(f => f.VideoId)))
-                );
-
-                if (!searchResponse.IsValid)
+                while (true)
                 {
-                    _logger.LogError("Failed to get indexed video IDs: {Error}", searchResponse.DebugInformation);
-                    return new List<string>();
-                }
-
-                return searchResponse.Documents.Select(d => d.VideoId).ToList();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error getting indexed video IDs");
-                return new List<string>();
-            }
-        }
-
-        public async Task BulkReindexAsync(IProgress<int> progress, CancellationToken cancellationToken = default)
-        {
-            try
-            {
-                using var scope = _serviceProvider.CreateScope();
-                var dbContext = scope.ServiceProvider.GetRequiredService<TikTokArchiveDbContext>();
-
-                var totalVideos = await dbContext.Videos.CountAsync(cancellationToken);
-                var processedCount = 0;
-                const int batchSize = 100;
-
-                _logger.LogInformation("Starting bulk reindex of {TotalVideos} videos", totalVideos);
-
-                for (var skip = 0; skip < totalVideos; skip += batchSize)
-                {
-                    if (cancellationToken.IsCancellationRequested) break;
-
-                    var videos = await dbContext.Videos
-                        .Include(v => v.Creator)
-                        .Include(v => v.Tags).ThenInclude(vt => vt.Tag)
-                        .Include(v => v.Transcript)
-                        .OrderBy(v => v.Id)
-                        .Skip(skip)
-                        .Take(batchSize)
-                        .ToListAsync(cancellationToken);
-
-                    var bulkDescriptor = new BulkDescriptor();
-
-                    foreach (var video in videos)
+                    if (!response.IsValid)
                     {
-                        var document = new VideoDocument
-                        {
-                            VideoId = video.TikTokVideoId,
-                            Description = video.Description ?? string.Empty,
-                            CreatorName = video.Creator?.DisplayName ?? string.Empty,
-                            CreatorUsername = video.Creator?.TikTokId ?? string.Empty,
-                            Tags = video.Tags?.Select(vt => vt.Tag.Name).ToList() ?? new List<string>(),
-                            TranscriptText = video.Transcript?.TranscriptText,
-                            CreatedAt = video.CreatedAt,
-                            AddedToApp = video.AddedToApp
-                        };
-
-                        bulkDescriptor.Index<VideoDocument>(i => i
-                            .Document(document)
-                            .Id(video.TikTokVideoId)
-                        );
+                        throw new InvalidOperationException(
+                            $"Failed to enumerate indexed video IDs: {response.DebugInformation}");
                     }
 
-                    var bulkResponse = await _client.BulkAsync(bulkDescriptor, cancellationToken);
+                    if (!response.Documents.Any()) break;
 
-                    if (!bulkResponse.IsValid)
-                    {
-                        _logger.LogError("Bulk index failed for batch: {Error}", bulkResponse.DebugInformation);
-                    }
-
-                    processedCount += videos.Count;
-                    progress.Report(processedCount);
+                    ids.AddRange(response.Documents.Select(d => d.VideoId));
+                    response = await _client.ScrollAsync<VideoDocument>(scrollTimeout, response.ScrollId, ct: cancellationToken);
                 }
-
-                await _client.Indices.RefreshAsync(IndexName);
-                _logger.LogInformation("Bulk reindex completed: {ProcessedCount} videos indexed", processedCount);
             }
-            catch (Exception ex)
+            finally
             {
-                _logger.LogError(ex, "Error during bulk reindex");
-                throw;
+                if (!string.IsNullOrEmpty(response.ScrollId))
+                {
+                    await _client.ClearScrollAsync(c => c.ScrollId(response.ScrollId), cancellationToken);
+                }
             }
+
+            return ids;
         }
     }
 }

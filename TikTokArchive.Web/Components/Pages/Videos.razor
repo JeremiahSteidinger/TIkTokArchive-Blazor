@@ -1,8 +1,11 @@
 @page "/videos"
 @inject TikTokArchive.Web.Services.IVideoService VideoService
+@inject TikTokArchive.Web.Services.VideoIngestQueue IngestQueue
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 @using TikTokArchive.Entities
+@using TikTokArchive.Web.Services
+@implements IDisposable
 
 <MudStack Spacing="3">
     <MudPaper Class="pa-4">
@@ -17,45 +20,92 @@
             @if (showAddVideo)
             {
                 <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                    <MudTextField @bind-Value="newVideoUrl" 
+                    <MudTextField @bind-Value="newVideoUrl"
                                   Immediate="true"
-                                  Label="TikTok Video URL" 
-                                  Variant="Variant.Outlined" 
+                                  Label="TikTok Video URL"
+                                  Variant="Variant.Outlined"
                                   FullWidth="true"
-                                  Disabled="isSubmitting"
                                   Placeholder="Enter TikTok video URL" />
-                    <MudButton Variant="Variant.Filled" 
-                               Color="Color.Primary" 
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
                                OnClick="SubmitVideo"
-                               Disabled="@(isSubmitting || string.IsNullOrWhiteSpace(newVideoUrl))">
-                        @if (isSubmitting)
-                        {
-                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Justify="Justify.Center">
-                                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
-                                <MudText>Submitting...</MudText>
-                            </MudStack>
-                        }
-                        else
-                        {
-                            <MudText>Submit</MudText>
-                        }
+                               Disabled="@(string.IsNullOrWhiteSpace(newVideoUrl))">
+                        <MudText>Submit</MudText>
                     </MudButton>
                 </MudStack>
             }
         </MudStack>
     </MudPaper>
-    
+
+    @if (ingestJobs.Count > 0)
+    {
+        <MudPaper Class="pa-4">
+            <MudText Typo="Typo.subtitle1" Class="mb-2">Downloads</MudText>
+            <MudStack Spacing="1">
+                @foreach (var job in ingestJobs)
+                {
+                    @if (job.Status == IngestJobStatus.Failed)
+                    {
+                        <MudAlert Severity="Severity.Error"
+                                  Dense="true"
+                                  ShowCloseIcon="true"
+                                  CloseIconClicked="@(() => DismissJob(job))">
+                            <MudText Typo="Typo.body2" Style="word-break: break-all;">@job.Url</MudText>
+                            <MudText Typo="Typo.caption">@job.Error</MudText>
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                            <MudText Typo="Typo.body2">@JobStatusText(job.Status)</MudText>
+                            <MudText Typo="Typo.caption" Style="overflow: hidden; text-overflow: ellipsis;">@job.Url</MudText>
+                        </MudStack>
+                    }
+                }
+            </MudStack>
+        </MudPaper>
+    }
+
+
     <MudPaper Class="pa-4">
         <MudStack Spacing="2">
             <MudTextField @bind-Value="searchQuery"
                           Label="Search videos"
                           Variant="Variant.Outlined"
-                          Placeholder="Search all fields (descriptions, creators, tags)"
+                          Placeholder="Search descriptions, creators, or tags"
                           Adornment="Adornment.End"
-                          AdornmentIcon="@(string.IsNullOrWhiteSpace(searchQuery) ? Icons.Material.Filled.Search : Icons.Material.Filled.Clear)"
-                          OnAdornmentClick="ClearSearch"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
                           OnKeyUp="HandleSearchKeyUp"
                           Immediate="false" />
+            
+            <MudStack Row="true" Spacing="1">
+                <MudText Typo="Typo.caption" Class="align-self-center">Search in:</MudText>
+                <MudChip T="string"
+                         Color="@(searchFields.Contains("all") ? Color.Primary : Color.Default)"
+                         OnClick="@(() => ToggleSearchField("all"))"
+                         Style="cursor: pointer;">
+                    All
+                </MudChip>
+                <MudChip T="string"
+                         Color="@(searchFields.Contains("description") ? Color.Primary : Color.Default)"
+                         OnClick="@(() => ToggleSearchField("description"))"
+                         Style="cursor: pointer;">
+                    Description
+                </MudChip>
+                <MudChip T="string"
+                         Color="@(searchFields.Contains("creator") ? Color.Primary : Color.Default)"
+                         OnClick="@(() => ToggleSearchField("creator"))"
+                         Style="cursor: pointer;">
+                    Creator
+                </MudChip>
+                <MudChip T="string"
+                         Color="@(searchFields.Contains("tags") ? Color.Primary : Color.Default)"
+                         OnClick="@(() => ToggleSearchField("tags"))"
+                         Style="cursor: pointer;">
+                    Tags
+                </MudChip>
+            </MudStack>
         </MudStack>
     </MudPaper>
         @if (!string.IsNullOrEmpty(selectedTag))
@@ -168,18 +218,34 @@ else
     private HashSet<string> loadedVideos = new();
     private string? selectedTag;
     private bool isLoading = true;
-    private bool isSubmitting = false;
     private string newVideoUrl = string.Empty;
     private bool showAddVideo = false;
     private int currentPage = 1;
     private int pageSize = 20;
     private string searchQuery = string.Empty;
+    private List<string> searchFields = new() { "all" };
     private System.Timers.Timer? searchDebounceTimer;
     private int totalCount = 0;
     private int totalPages => (int)Math.Ceiling(totalCount / (double)pageSize);
 
+    private IReadOnlyList<IngestJob> ingestJobs = Array.Empty<IngestJob>();
+    private readonly HashSet<Guid> notifiedJobs = new();
+    private System.Timers.Timer? jobPollTimer;
+
     protected override async Task OnInitializedAsync()
     {
+        // Pick up downloads from a previous visit without re-announcing finished ones;
+        // failed jobs stay visible in the panel until dismissed.
+        foreach (var job in IngestQueue.GetJobs().Where(j => j.IsFinished))
+        {
+            notifiedJobs.Add(job.Id);
+        }
+        RefreshIngestJobList();
+        if (ingestJobs.Any(j => !j.IsFinished))
+        {
+            StartJobPolling();
+        }
+
         await LoadVideos();
     }
 
@@ -196,8 +262,9 @@ else
         try
         {
             var searchQueryParam = string.IsNullOrWhiteSpace(searchQuery) ? null : searchQuery;
+            var searchFieldsParam = searchFields.Contains("all") ? null : searchFields;
             
-            var (loadedVideos, count) = await VideoService.GetVideosAsync(currentPage, pageSize, selectedTag, searchQueryParam, null);
+            var (loadedVideos, count) = await VideoService.GetVideosAsync(currentPage, pageSize, selectedTag, searchQueryParam, searchFieldsParam);
             videos = loadedVideos;
             totalCount = count;
         }
@@ -230,43 +297,123 @@ else
         searchDebounceTimer.Start();
     }
 
-    private async Task ClearSearch()
+    private async Task ToggleSearchField(string field)
     {
+        if (field == "all")
+        {
+            searchFields.Clear();
+            searchFields.Add("all");
+        }
+        else
+        {
+            searchFields.Remove("all");
+            if (searchFields.Contains(field))
+            {
+                searchFields.Remove(field);
+                if (searchFields.Count == 0)
+                {
+                    searchFields.Add("all");
+                }
+            }
+            else
+            {
+                searchFields.Add(field);
+            }
+        }
+        
         if (!string.IsNullOrWhiteSpace(searchQuery))
         {
-            searchQuery = string.Empty;
             currentPage = 1;
             await LoadVideos();
         }
     }
 
-    private async Task SubmitVideo()
+    private void SubmitVideo()
     {
-        if (string.IsNullOrWhiteSpace(newVideoUrl))
-        {
-            Snackbar.Add("Please enter a video URL", Severity.Warning);
-            return;
-        }
-
-        isSubmitting = true;
-        StateHasChanged(); // Force immediate UI update to show loading state
-        
         try
         {
-            await VideoService.AddVideo(newVideoUrl);
-            Snackbar.Add("Video submitted successfully!", Severity.Success);
+            IngestQueue.Enqueue(newVideoUrl);
+            Snackbar.Add("Video queued for download", Severity.Info);
             newVideoUrl = string.Empty;
+            RefreshIngestJobList();
+            StartJobPolling();
+        }
+        catch (ArgumentException ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Warning);
+        }
+    }
+
+    private void StartJobPolling()
+    {
+        if (jobPollTimer != null) return;
+
+        jobPollTimer = new System.Timers.Timer(2000);
+        jobPollTimer.Elapsed += async (sender, args) => await InvokeAsync(RefreshIngestJobsAsync);
+        jobPollTimer.Start();
+    }
+
+    private void RefreshIngestJobList()
+    {
+        ingestJobs = IngestQueue.GetJobs()
+            .Where(j => !j.IsFinished || (j.Status == IngestJobStatus.Failed && !j.Dismissed))
+            .ToList();
+    }
+
+    private void DismissJob(IngestJob job)
+    {
+        job.Dismiss();
+        RefreshIngestJobList();
+    }
+
+    private async Task RefreshIngestJobsAsync()
+    {
+        var jobs = IngestQueue.GetJobs();
+        var finishedToAnnounce = jobs.Where(j => j.IsFinished && notifiedJobs.Add(j.Id)).ToList();
+
+        foreach (var job in finishedToAnnounce)
+        {
+            if (job.Status == IngestJobStatus.Completed)
+            {
+                Snackbar.Add("Video added successfully!", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add($"Video download failed: {job.Error}", Severity.Error);
+            }
+        }
+
+        RefreshIngestJobList();
+
+        if (finishedToAnnounce.Any(j => j.Status == IngestJobStatus.Completed))
+        {
             currentPage = 1; // Reset to first page to see the new video
             await LoadVideos();
         }
-        catch (Exception ex)
+
+        if (!ingestJobs.Any(j => !j.IsFinished))
         {
-            Snackbar.Add($"Failed to submit video: {ex.Message}", Severity.Error);
+            jobPollTimer?.Stop();
+            jobPollTimer?.Dispose();
+            jobPollTimer = null;
         }
-        finally
-        {
-            isSubmitting = false;
-        }
+
+        StateHasChanged();
+    }
+
+    private static string JobStatusText(IngestJobStatus status) => status switch
+    {
+        IngestJobStatus.Queued => "Queued",
+        IngestJobStatus.FetchingMetadata => "Fetching metadata…",
+        IngestJobStatus.Downloading => "Downloading…",
+        IngestJobStatus.Saving => "Saving…",
+        _ => status.ToString()
+    };
+
+    public void Dispose()
+    {
+        searchDebounceTimer?.Dispose();
+        jobPollTimer?.Dispose();
     }
 
     private async Task OnPageChanged(int page)

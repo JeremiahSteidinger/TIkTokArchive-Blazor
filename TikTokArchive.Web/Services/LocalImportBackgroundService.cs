@@ -1,13 +1,23 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using TikTokArchive.Entities;
+using TikTokArchive.Web.Options;
 
 namespace TikTokArchive.Web.Services
 {
+    /// <summary>
+    /// Watches a drop folder for video files and imports each one into the archive.
+    /// Imported videos are attributed to a synthetic "Local Import" creator and dated
+    /// from the file's creation time (falling back to the Unix epoch when unavailable).
+    /// Every attempt — success or failure — is recorded in <see cref="LocalImportLog"/>
+    /// so the Admin page can report status.
+    /// </summary>
     public class LocalImportBackgroundService : BackgroundService
     {
         private static readonly string[] VideoExtensions = [".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".flv"];
 
         private readonly IServiceScopeFactory _scopeFactory;
+        private readonly SearchIndexSignal _searchSignal;
         private readonly ILogger<LocalImportBackgroundService> _logger;
         private readonly string _importPath;
         private readonly string _videosPath;
@@ -15,13 +25,16 @@ namespace TikTokArchive.Web.Services
 
         public LocalImportBackgroundService(
             IServiceScopeFactory scopeFactory,
+            SearchIndexSignal searchSignal,
+            IOptions<MediaStorageOptions> mediaOptions,
             ILogger<LocalImportBackgroundService> logger,
             IConfiguration configuration)
         {
             _scopeFactory = scopeFactory;
+            _searchSignal = searchSignal;
             _logger = logger;
             _importPath = configuration["LocalImport:ImportPath"] ?? "/dropfolder";
-            _videosPath = configuration["LocalImport:VideosPath"] ?? "/media/videos";
+            _videosPath = mediaOptions.Value.VideosPath;
             var pollSeconds = double.Parse(configuration["LocalImport:PollIntervalSeconds"] ?? "60");
             _pollInterval = TimeSpan.FromSeconds(pollSeconds);
         }
@@ -85,9 +98,6 @@ namespace TikTokArchive.Web.Services
 
                 using var scope = _scopeFactory.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<TikTokArchiveDbContext>();
-                var searchQueue = scope.ServiceProvider.GetRequiredService<SearchIndexQueue>();
-                var rabbitMq = scope.ServiceProvider.GetRequiredService<RabbitMQService>();
-                var providerFactory = scope.ServiceProvider.GetRequiredService<SpeechToTextProviderFactory>();
 
                 var creator = await db.Creators
                     .FirstOrDefaultAsync(c => c.TikTokId == "local-import", cancellationToken);
@@ -109,10 +119,17 @@ namespace TikTokArchive.Web.Services
                     Tags = []
                 };
 
+                // Persist the video and its search-index outbox row in a single SaveChanges
+                // so a failure leaves no partial state, mirroring the URL ingest pipeline.
                 db.Videos.Add(video);
-                await db.SaveChangesAsync(cancellationToken);
+                db.SearchIndexOperations.Add(new SearchIndexOperation
+                {
+                    OperationType = SearchIndexOperationType.Index,
+                    VideoId = videoId,
+                    CreatedAt = DateTime.UtcNow
+                });
 
-                // Write success log
+                // Write the success log in the same transaction as the video itself.
                 db.LocalImportLogs.Add(new LocalImportLog
                 {
                     FileName = fileName,
@@ -121,42 +138,11 @@ namespace TikTokArchive.Web.Services
                     DateCreatedUsed = createdAt,
                     ImportedAt = DateTime.UtcNow
                 });
+
                 await db.SaveChangesAsync(cancellationToken);
+                _searchSignal.Notify();
 
                 _logger.LogInformation("Imported local video {VideoId} from {FileName}", videoId, fileName);
-
-                try
-                {
-                    await searchQueue.EnqueueAsync(SearchIndexOperationType.Index, video.TikTokVideoId);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to queue search index operation for {VideoId}", videoId);
-                }
-
-                try
-                {
-                    if (await providerFactory.IsEnabledAsync() && rabbitMq.IsConnected)
-                    {
-                        var queueItem = new TranscriptionQueueItem
-                        {
-                            VideoId = video.Id,
-                            Status = TranscriptionStatus.Pending,
-                            QueuedAt = DateTime.UtcNow,
-                            Provider = await providerFactory.GetConfiguredProviderTypeAsync()
-                        };
-
-                        db.TranscriptionQueueItems.Add(queueItem);
-                        await db.SaveChangesAsync(cancellationToken);
-
-                        await rabbitMq.PublishTranscriptionMessageAsync(video.Id, queueItem.Provider);
-                        _logger.LogInformation("Queued {VideoId} for transcription", videoId);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to queue transcription for {VideoId}", videoId);
-                }
             }
             catch (Exception ex)
             {

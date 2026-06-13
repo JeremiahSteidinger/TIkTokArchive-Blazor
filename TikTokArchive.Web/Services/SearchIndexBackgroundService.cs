@@ -3,18 +3,30 @@ using TikTokArchive.Entities;
 
 namespace TikTokArchive.Web.Services
 {
+    /// <summary>
+    /// Outbox worker for the search index. The SearchIndexOperations table is the queue:
+    /// rows are written in the same SaveChanges as the video change that caused them, and
+    /// this worker polls the table, applies each operation to OpenSearch, and deletes the
+    /// row on success. Failed rows are retried in place with capped exponential backoff —
+    /// they are never duplicated and never permanently abandoned, so an OpenSearch outage
+    /// heals on its own once the cluster is back.
+    /// </summary>
     public class SearchIndexBackgroundService : BackgroundService
     {
-        private readonly SearchIndexQueue _queue;
+        private const int BatchSize = 25;
+        private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(15);
+        private static readonly TimeSpan MaxBackoff = TimeSpan.FromHours(1);
+
+        private readonly SearchIndexSignal _signal;
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<SearchIndexBackgroundService> _logger;
 
         public SearchIndexBackgroundService(
-            SearchIndexQueue queue,
+            SearchIndexSignal signal,
             IServiceProvider serviceProvider,
             ILogger<SearchIndexBackgroundService> logger)
         {
-            _queue = queue;
+            _signal = signal;
             _serviceProvider = serviceProvider;
             _logger = logger;
         }
@@ -23,17 +35,15 @@ namespace TikTokArchive.Web.Services
         {
             _logger.LogInformation("Search Index Background Service started");
 
-            // Requeue any failed operations on startup
-            await _queue.RequeueFailedOperationsAsync();
-
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
-                    var item = await _queue.DequeueAsync(stoppingToken);
-                    if (item == null) continue;
-
-                    await ProcessItemAsync(item, stoppingToken);
+                    var processedAny = await ProcessDueOperationsAsync(stoppingToken);
+                    if (!processedAny)
+                    {
+                        await _signal.WaitAsync(PollInterval, stoppingToken);
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -41,7 +51,7 @@ namespace TikTokArchive.Web.Services
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error processing search index queue item");
+                    _logger.LogError(ex, "Error in search index worker loop");
                     await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
                 }
             }
@@ -49,72 +59,96 @@ namespace TikTokArchive.Web.Services
             _logger.LogInformation("Search Index Background Service stopped");
         }
 
-        private async Task ProcessItemAsync(SearchIndexQueueItem item, CancellationToken cancellationToken)
+        private async Task<bool> ProcessDueOperationsAsync(CancellationToken cancellationToken)
         {
             using var scope = _serviceProvider.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<TikTokArchiveDbContext>();
             var searchService = scope.ServiceProvider.GetRequiredService<ISearchService>();
 
-            // Find the operation in the database
-            var operation = await dbContext.SearchIndexOperations
-                .FirstOrDefaultAsync(o => o.VideoId == item.VideoId && o.OperationType == item.OperationType, cancellationToken);
+            // Backoff eligibility is computed in memory because it depends on RetryCount;
+            // the table only ever holds a handful of rows, so over-fetching is cheap.
+            var now = DateTime.UtcNow;
+            var candidates = await dbContext.SearchIndexOperations
+                .OrderBy(o => o.Id)
+                .Take(200)
+                .ToListAsync(cancellationToken);
 
-            if (operation == null)
+            var dueOperations = candidates
+                .Where(o => IsDue(o, now))
+                .Take(BatchSize)
+                .ToList();
+
+            foreach (var operation in dueOperations)
             {
-                _logger.LogWarning("Operation not found in database for video {VideoId}", item.VideoId);
-                return;
+                cancellationToken.ThrowIfCancellationRequested();
+                await ProcessOperationAsync(dbContext, searchService, operation, cancellationToken);
             }
 
+            return dueOperations.Count > 0;
+        }
+
+        private static bool IsDue(SearchIndexOperation operation, DateTime now)
+        {
+            if (operation.LastAttempt == null) return true;
+            return operation.LastAttempt.Value + BackoffFor(operation.RetryCount) <= now;
+        }
+
+        private static TimeSpan BackoffFor(int retryCount)
+        {
+            var seconds = 30 * Math.Pow(2, Math.Min(retryCount, 10));
+            return TimeSpan.FromSeconds(Math.Min(seconds, MaxBackoff.TotalSeconds));
+        }
+
+        private async Task ProcessOperationAsync(
+            TikTokArchiveDbContext dbContext,
+            ISearchService searchService,
+            SearchIndexOperation operation,
+            CancellationToken cancellationToken)
+        {
             try
             {
-                if (item.OperationType == SearchIndexOperationType.Index)
+                if (operation.OperationType == SearchIndexOperationType.Index)
                 {
                     var video = await dbContext.Videos
                         .Include(v => v.Creator)
                         .Include(v => v.Tags).ThenInclude(vt => vt.Tag)
-                        .FirstOrDefaultAsync(v => v.TikTokVideoId == item.VideoId, cancellationToken);
+                        .FirstOrDefaultAsync(v => v.TikTokVideoId == operation.VideoId, cancellationToken);
 
                     if (video != null)
                     {
-                        await searchService.IndexVideoAsync(video);
-                        _logger.LogInformation("Successfully indexed video {VideoId}", item.VideoId);
+                        await searchService.IndexVideoAsync(video, cancellationToken);
                     }
                     else
                     {
-                        _logger.LogWarning("Video {VideoId} not found in database", item.VideoId);
+                        // The video was deleted before this row was processed; make sure
+                        // the index agrees rather than leaving the decision to the sync sweep.
+                        await searchService.DeleteVideoAsync(operation.VideoId, cancellationToken);
                     }
-                }
-                else if (item.OperationType == SearchIndexOperationType.Delete)
-                {
-                    await searchService.DeleteVideoAsync(item.VideoId);
-                    _logger.LogInformation("Successfully deleted video {VideoId} from index", item.VideoId);
-                }
-
-                // Remove from database on success
-                dbContext.SearchIndexOperations.Remove(operation);
-                await dbContext.SaveChangesAsync(cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error processing {OperationType} for video {VideoId}", 
-                    item.OperationType, item.VideoId);
-
-                // Update retry count
-                operation.RetryCount++;
-                operation.LastAttempt = DateTime.UtcNow;
-                operation.ErrorMessage = ex.Message;
-                await dbContext.SaveChangesAsync(cancellationToken);
-
-                // Requeue if under max retries
-                if (operation.RetryCount < 3)
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, operation.RetryCount)), cancellationToken);
-                    await _queue.EnqueueAsync(item.OperationType, item.VideoId);
                 }
                 else
                 {
-                    _logger.LogError("Max retries exceeded for video {VideoId}", item.VideoId);
+                    await searchService.DeleteVideoAsync(operation.VideoId, cancellationToken);
                 }
+
+                dbContext.SearchIndexOperations.Remove(operation);
+                await dbContext.SaveChangesAsync(cancellationToken);
+
+                _logger.LogDebug("Processed {OperationType} for video {VideoId}",
+                    operation.OperationType, operation.VideoId);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing {OperationType} for video {VideoId} (attempt {Attempt})",
+                    operation.OperationType, operation.VideoId, operation.RetryCount + 1);
+
+                operation.RetryCount++;
+                operation.LastAttempt = DateTime.UtcNow;
+                operation.ErrorMessage = ex.GetFullMessage();
+                await dbContext.SaveChangesAsync(cancellationToken);
             }
         }
     }

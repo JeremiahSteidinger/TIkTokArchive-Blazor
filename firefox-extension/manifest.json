@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "TikTok Archive Companion",
+  "version": "1.0",
+  "description": "Sync TikTok cookies to your self-hosted TikTok Archive and queue videos for download.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "tiktok-archive-companion@selfhosted.local",
+      "strict_min_version": "115.0"
+    }
+  },
+  "permissions": ["cookies", "storage", "activeTab"],
+  "host_permissions": ["*://*.tiktok.com/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "TikTok Archive"
+  }
+}

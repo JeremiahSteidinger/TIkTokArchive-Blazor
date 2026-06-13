@@ -91,32 +91,13 @@ namespace TikTokArchive.Entities.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("AzureSpeechKey")
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("AzureSpeechRegion")
-                        .HasColumnType("longtext");
-
                     b.Property<DateTime>("LastModified")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime(6)")
                         .HasDefaultValueSql("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
 
-                    b.Property<string>("OpenAiApiKey")
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("SttProvider")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
                     b.Property<int>("SyncIntervalMinutes")
                         .HasColumnType("int");
-
-                    b.Property<string>("WhisperModel")
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("WhisperUrl")
-                        .HasColumnType("longtext");
 
                     b.HasKey("Id");
 
@@ -178,45 +159,6 @@ namespace TikTokArchive.Entities.Migrations
                     b.ToTable("Tags");
                 });
 
-            modelBuilder.Entity("TikTokArchive.Entities.TranscriptionQueueItem", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("ErrorMessage")
-                        .HasColumnType("longtext");
-
-                    b.Property<DateTime?>("ProcessedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<string>("Provider")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<DateTime>("QueuedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime(6)")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
-
-                    b.Property<int>("RetryCount")
-                        .HasColumnType("int");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("int");
-
-                    b.Property<int>("VideoId")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("VideoId");
-
-                    b.ToTable("TranscriptionQueueItems");
-                });
-
             modelBuilder.Entity("TikTokArchive.Entities.Video", b =>
                 {
                     b.Property<int>("Id")
@@ -275,54 +217,6 @@ namespace TikTokArchive.Entities.Migrations
                     b.ToTable("VideoTags");
                 });
 
-            modelBuilder.Entity("TikTokArchive.Entities.VideoTranscript", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Language")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<DateTime>("ProcessedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<int>("ProcessingTimeSeconds")
-                        .HasColumnType("int");
-
-                    b.Property<string>("Provider")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("TranscriptText")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<int>("VideoId")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("VideoId")
-                        .IsUnique();
-
-                    b.ToTable("VideoTranscripts");
-                });
-
-            modelBuilder.Entity("TikTokArchive.Entities.TranscriptionQueueItem", b =>
-                {
-                    b.HasOne("TikTokArchive.Entities.Video", "Video")
-                        .WithMany()
-                        .HasForeignKey("VideoId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Video");
-                });
-
             modelBuilder.Entity("TikTokArchive.Entities.Video", b =>
                 {
                     b.HasOne("TikTokArchive.Entities.Creator", "Creator")
@@ -353,17 +247,6 @@ namespace TikTokArchive.Entities.Migrations
                     b.Navigation("Video");
                 });
 
-            modelBuilder.Entity("TikTokArchive.Entities.VideoTranscript", b =>
-                {
-                    b.HasOne("TikTokArchive.Entities.Video", "Video")
-                        .WithOne("Transcript")
-                        .HasForeignKey("TikTokArchive.Entities.VideoTranscript", "VideoId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Video");
-                });
-
             modelBuilder.Entity("TikTokArchive.Entities.Creator", b =>
                 {
                     b.Navigation("Videos");
@@ -377,8 +260,6 @@ namespace TikTokArchive.Entities.Migrations
             modelBuilder.Entity("TikTokArchive.Entities.Video", b =>
                 {
                     b.Navigation("Tags");
-
-                    b.Navigation("Transcript");
                 });
 #pragma warning restore 612, 618
         }

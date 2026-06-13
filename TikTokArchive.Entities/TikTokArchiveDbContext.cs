@@ -10,8 +10,6 @@ namespace TikTokArchive.Entities
         public DbSet<VideoTag> VideoTags { get; set; }
         public DbSet<SearchIndexOperation> SearchIndexOperations { get; set; }
         public DbSet<SearchIndexConfiguration> SearchIndexConfigurations { get; set; }
-        public DbSet<VideoTranscript> VideoTranscripts { get; set; }
-        public DbSet<TranscriptionQueueItem> TranscriptionQueueItems { get; set; }
         public DbSet<LocalImportLog> LocalImportLogs { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -58,25 +56,6 @@ namespace TikTokArchive.Entities
             modelBuilder.Entity<SearchIndexConfiguration>()
                 .Property(s => s.LastModified)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
-
-            // Video -> VideoTranscript (one-to-one)
-            modelBuilder.Entity<Video>()
-                .HasOne(v => v.Transcript)
-                .WithOne(vt => vt.Video)
-                .HasForeignKey<VideoTranscript>(vt => vt.VideoId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            // TranscriptionQueueItem -> Video (many-to-one)
-            modelBuilder.Entity<TranscriptionQueueItem>()
-                .HasOne(tqi => tqi.Video)
-                .WithMany()
-                .HasForeignKey(tqi => tqi.VideoId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            // TranscriptionQueueItem - queued timestamp default
-            modelBuilder.Entity<TranscriptionQueueItem>()
-                .Property(tqi => tqi.QueuedAt)
-                .HasDefaultValueSql("CURRENT_TIMESTAMP");
 
             // LocalImportLog - imported timestamp default
             modelBuilder.Entity<LocalImportLog>()

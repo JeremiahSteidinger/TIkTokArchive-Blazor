@@ -8,36 +8,13 @@ services:
       - "${APP_PORT:-8080}:8080"
     environment:
       - OpenSearch:Url=http://opensearch:9200
-      - RABBITMQ_CONNECTION_STRING=amqp://guest:guest@rabbitmq:5672
-      - STT_PROVIDER=None
-      - WHISPER_URL=http://whisper:9000
-      - WHISPER_MODEL=base
     volumes:
       - ./media:/media
+      # Drop video files here and the local import service will ingest them.
+      - ./dropfolder:/dropfolder
     depends_on:
-      - opensearch
-      - rabbitmq
-
-  rabbitmq:
-    image: rabbitmq:3-management
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    environment:
-      - RABBITMQ_DEFAULT_USER=guest
-      - RABBITMQ_DEFAULT_PASS=guest
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-
-  whisper:
-    image: onerahmet/openai-whisper-asr-webservice:latest
-    ports:
-      - "9000:9000"
-    environment:
-      - ASR_MODEL=base
-      - ASR_ENGINE=openai_whisper
-    volumes:
-      - whisper_models:/root/.cache/whisper
+      opensearch:
+        condition: service_healthy
 
   opensearch:
     image: opensearchproject/opensearch:2
@@ -49,9 +26,12 @@ services:
       - "9200:9200"
     volumes:
       - opensearch_data:/usr/share/opensearch/data
-
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
 
 volumes:
   opensearch_data:
-  rabbitmq_data:
-  whisper_models:

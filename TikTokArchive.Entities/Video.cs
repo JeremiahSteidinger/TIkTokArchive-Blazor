@@ -13,6 +13,5 @@ namespace TikTokArchive.Entities
 
         public virtual Creator Creator { get; set; }
         public virtual IEnumerable<VideoTag> Tags { get; set; }
-        public virtual VideoTranscript? Transcript { get; set; }
     }
 }

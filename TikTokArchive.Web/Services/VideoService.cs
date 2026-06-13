@@ -1,8 +1,7 @@
-using System.Diagnostics;
-using System.Runtime.Intrinsics.Arm;
 using Microsoft.EntityFrameworkCore;
-using Newtonsoft.Json;
+using Microsoft.Extensions.Options;
 using TikTokArchive.Entities;
+using TikTokArchive.Web.Options;
 
 namespace TikTokArchive.Web.Services;
 
@@ -11,40 +10,38 @@ public interface IVideoService
     Task<(List<Video> Videos, int TotalCount)> GetVideosAsync(int page = 1, int pageSize = 20, string? tagFilter = null, string? searchQuery = null, List<string>? searchFields = null);
     Task<Video?> GetVideoAsync(string id);
     Task DeleteVideoAsync(string id);
-    Task AddVideo(string videoUrl);
 }
 
 public class VideoService : IVideoService
 {
     private readonly TikTokArchiveDbContext dbContext;
     private readonly ILogger<VideoService> logger;
-    private readonly SearchIndexQueue? searchIndexQueue;
-    private readonly ISearchService? searchService;
-    private readonly RabbitMQService? rabbitMQService;
-    private readonly SpeechToTextProviderFactory? providerFactory;
+    private readonly ISearchService searchService;
+    private readonly SearchIndexSignal searchSignal;
+    private readonly MediaStorageOptions mediaOptions;
 
     public VideoService(
-        TikTokArchiveDbContext dbContext, 
-        ILogger<VideoService> logger, 
-        SearchIndexQueue? searchIndexQueue = null, 
-        ISearchService? searchService = null,
-        RabbitMQService? rabbitMQService = null,
-        SpeechToTextProviderFactory? providerFactory = null)
+        TikTokArchiveDbContext dbContext,
+        ILogger<VideoService> logger,
+        ISearchService searchService,
+        SearchIndexSignal searchSignal,
+        IOptions<MediaStorageOptions> mediaOptions)
     {
         this.dbContext = dbContext;
         this.logger = logger;
-        this.searchIndexQueue = searchIndexQueue;
         this.searchService = searchService;
-        this.rabbitMQService = rabbitMQService;
-        this.providerFactory = providerFactory;
+        this.searchSignal = searchSignal;
+        this.mediaOptions = mediaOptions.Value;
     }
+
     public async Task<(List<Video> Videos, int TotalCount)> GetVideosAsync(int page = 1, int pageSize = 20, string? tagFilter = null, string? searchQuery = null, List<string>? searchFields = null)
     {
         // If search query provided, use search service
-        if (!string.IsNullOrWhiteSpace(searchQuery) && searchService != null)
+        if (!string.IsNullOrWhiteSpace(searchQuery))
         {
             var searchResult = await searchService.SearchAsync(searchQuery, page, pageSize, searchFields);
-            return (searchResult.Videos, searchResult.TotalCount);
+            var matchedVideos = await LoadVideosByIdsAsync(searchResult.VideoIds);
+            return (matchedVideos, (int)searchResult.TotalCount);
         }
 
         var query = dbContext.Videos
@@ -72,6 +69,27 @@ public class VideoService : IVideoService
         return (videos, totalCount);
     }
 
+    private async Task<List<Video>> LoadVideosByIdsAsync(List<string> videoIds)
+    {
+        if (videoIds.Count == 0)
+        {
+            return new List<Video>();
+        }
+
+        var videos = await dbContext.Videos
+            .Include(v => v.Creator)
+            .Include(v => v.Tags).ThenInclude(vt => vt.Tag)
+            .Where(v => videoIds.Contains(v.TikTokVideoId))
+            .ToListAsync();
+
+        // Preserve the search engine's relevance ordering
+        return videoIds
+            .Select(id => videos.FirstOrDefault(v => v.TikTokVideoId == id))
+            .Where(v => v != null)
+            .Cast<Video>()
+            .ToList();
+    }
+
     public async Task<Video?> GetVideoAsync(string id)
     {
         return await dbContext.Videos
@@ -82,7 +100,6 @@ public class VideoService : IVideoService
 
     public async Task DeleteVideoAsync(string id)
     {
-        // Find the video in the database
         var video = await dbContext.Videos
             .Include(v => v.Tags)
             .FirstOrDefaultAsync(v => v.TikTokVideoId == id);
@@ -92,297 +109,42 @@ public class VideoService : IVideoService
             throw new KeyNotFoundException($"Video with ID {id} not found.");
         }
 
-        var videoDirectory = "/media/videos";
-        var thumbnailDirectory = "/media/thumbnails";
+        // Remove the video and queue the index deletion atomically; the outbox worker
+        // applies it to OpenSearch afterwards.
+        dbContext.Videos.Remove(video);
+        dbContext.SearchIndexOperations.Add(new SearchIndexOperation
+        {
+            OperationType = SearchIndexOperationType.Delete,
+            VideoId = id,
+            CreatedAt = DateTime.UtcNow
+        });
+        await dbContext.SaveChangesAsync();
+        searchSignal.Notify();
+
+        // Media files go last: an orphaned file is invisible, but a database row pointing
+        // at a deleted file would show up as a broken video in the UI.
+        DeleteMediaFiles(mediaOptions.VideosPath, id);
+        DeleteMediaFiles(mediaOptions.ThumbnailsPath, id);
 
         var sanitizedId = id.Replace("\r", string.Empty).Replace("\n", string.Empty);
-
-        // Delete video file
-        var videoFiles = Directory.GetFiles(videoDirectory, $"{id}.*");
-        foreach (var videoFile in videoFiles)
-        {
-            try
-            {
-                System.IO.File.Delete(videoFile);
-                logger.LogInformation($"Deleted video file: {videoFile}");
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning($"Failed to delete video file {videoFile}: {ex.Message}");
-            }
-        }
-
-        // Delete thumbnail file
-        var thumbnailFiles = Directory.GetFiles(thumbnailDirectory, $"{id}.*");
-        foreach (var thumbnailFile in thumbnailFiles)
-        {
-            try
-            {
-                System.IO.File.Delete(thumbnailFile);
-                logger.LogInformation($"Deleted thumbnail file: {thumbnailFile}");
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning($"Failed to delete thumbnail file {thumbnailFile}: {ex.Message}");
-            }
-        }
-
-        // Remove video and related tags from database
-        dbContext.Videos.Remove(video);
-        await dbContext.SaveChangesAsync();
-
-        // Queue search index deletion (non-blocking)
-        try
-        {
-            if (searchIndexQueue != null)
-            {
-                await searchIndexQueue.EnqueueAsync(SearchIndexOperationType.Delete, id);
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to queue search index deletion for video {VideoId}", sanitizedId);
-        }
-
-        logger.LogInformation($"Successfully deleted video with ID {sanitizedId}");
+        logger.LogInformation("Successfully deleted video with ID {VideoId}", sanitizedId);
     }
 
-    public async Task AddVideo(string videoUrl)
+    private void DeleteMediaFiles(string directory, string videoId)
     {
-        if (string.IsNullOrEmpty(videoUrl))
-        {
-            throw new Exception("Video URL is required.");
-        }
+        if (!Directory.Exists(directory)) return;
 
-        if (!Uri.TryCreate(videoUrl, UriKind.Absolute, out var videoUri) ||
-            (videoUri.Scheme != Uri.UriSchemeHttp && videoUri.Scheme != Uri.UriSchemeHttps))
-        {
-            throw new Exception("Invalid video URL format.");
-        }
-
-        // Restrict to TikTok domains to prevent abuse while allowing all legitimate subdomains
-        var host = videoUri.Host;
-        bool isTikTokHost =
-            host.Equals("tiktok.com", StringComparison.OrdinalIgnoreCase) ||
-            host.EndsWith(".tiktok.com", StringComparison.OrdinalIgnoreCase);
-
-        if (!isTikTokHost)
-        {
-            throw new Exception("Only TikTok URLs are allowed.");
-        }
-
-        string tiktokUrl = videoUri.ToString();
-
-        // Get the current directory and set the yt-dlp path
-        string currentDirectory = Directory.GetCurrentDirectory();
-
-        // Set the output paths
-        string metadataDirectory = Path.Combine(currentDirectory, "data");
-        string metadataFilePath = Path.Combine(metadataDirectory, "metadata.json");
-
-        // Ensure directories exist
-        Directory.CreateDirectory(metadataDirectory);
-
-        // Set the video directory
-        string videoDirectory = "/media/videos";
-        Directory.CreateDirectory(videoDirectory);
-
-        string thumbnailDirectory = "/media/thumbnails";
-        Directory.CreateDirectory(thumbnailDirectory);
-
-        // Step 1: Fetch metadata
-        string fetchMetadataArguments = $"--dump-json --output \"{Path.Combine(videoDirectory, "%(id)s.%(ext)s")}\" {tiktokUrl}";
-
-        // Fetch metadata and download video
-        Console.WriteLine($"Fetching metadata and downloading video for URL: {tiktokUrl}");
-
-        var tool = Path.Combine(AppContext.BaseDirectory, "Tools", "yt-dlp");
-
-        var dump = new ProcessStartInfo(tool)
-        {
-            Arguments = $"--dump-json --skip-download --no-warnings --no-playlist {tiktokUrl}",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        using var p = Process.Start(dump)!;
-        var json = p.StandardOutput.ReadToEnd();
-        var err = p.StandardError.ReadToEnd();
-        p.WaitForExit();
-        if (p.ExitCode != 0)
-        {
-            Console.WriteLine($"Error fetching metadata: {err}");
-        }
-
-        var tikTokVideo = JsonConvert.DeserializeObject<TikTokVideo>(json)!;
-        var videoId = tikTokVideo.VideoId; // safe & unambiguous
-
-        if (string.IsNullOrEmpty(videoId))
-        {
-            Console.WriteLine("Failed to extract video ID from metadata.");
-            throw new Exception("Failed to extract video ID from metadata");
-        }
-
-        // Create a new Video entity
-        Video video = new Video
-        {
-            TikTokVideoId = videoId,
-            Description = tikTokVideo.Description,
-            AddedToApp = DateTime.UtcNow,
-            Creator = new Creator
-            {
-                TikTokId = tikTokVideo.Uploader,
-                DisplayName = tikTokVideo.Channel
-            }
-        };
-
-        // Set the CreatedAt property from tikTokVideo Epoc value
-        DateTime dateTime = DateTimeOffset.FromUnixTimeSeconds(tikTokVideo.Timestamp).UtcDateTime;
-        video.CreatedAt = dateTime;
-
-        // Download thumbnail and save to file system
-        if (!string.IsNullOrEmpty(tikTokVideo.Thumbnail))
+        foreach (var file in Directory.GetFiles(directory, $"{videoId}.*"))
         {
             try
             {
-                var thumbnailPath = Path.Combine(thumbnailDirectory, $"{videoId}.jpg");
-                using var httpClient = new HttpClient();
-                var bytes = await httpClient.GetByteArrayAsync(tikTokVideo.Thumbnail);
-                await File.WriteAllBytesAsync(thumbnailPath, bytes);
+                File.Delete(file);
+                logger.LogInformation("Deleted media file: {File}", file);
             }
-            catch (Exception thumbEx)
+            catch (Exception ex)
             {
-                logger.LogError($"Failed to download thumbnail for {videoId}: {thumbEx.Message}");
+                logger.LogWarning(ex, "Failed to delete media file {File}", file);
             }
         }
-
-        // Check if the video already exists in the database
-        var existingVideo = dbContext.Videos
-            .Include(v => v.Creator)
-            .FirstOrDefault(v => v.TikTokVideoId == video.TikTokVideoId);
-        if (existingVideo != null)
-        {
-            logger.LogInformation($"Video with ID {video.TikTokVideoId} already exists in the database.");
-            throw new Exception("Video already exists");
-        }
-
-        // Parse description to extract tags. Tags start with a '#' character.
-        var videoTags = new List<VideoTag>();
-        if (!string.IsNullOrEmpty(video.Description))
-        {
-            var tagNames = video.Description.Split(' ')
-                .Where(word => word.StartsWith("#"))
-                .Select(tag => tag.TrimStart('#').ToLowerInvariant())
-                .Distinct()
-                .Where(tagName => !string.IsNullOrWhiteSpace(tagName))
-                .ToList();
-
-            // Get or create tags
-            foreach (var tagName in tagNames)
-            {
-                var existingTag = dbContext.Tags.FirstOrDefault(t => t.Name == tagName);
-                if (existingTag == null)
-                {
-                    existingTag = new Tag { Name = tagName };
-                    dbContext.Tags.Add(existingTag);
-                    dbContext.SaveChanges(); // Save to get ID
-                }
-
-                videoTags.Add(new VideoTag { Tag = existingTag });
-            }
-
-            // Remove tags from description
-            video.Description = string.Join(' ', video.Description.Split(' ')
-                .Where(word => !word.StartsWith("#")))
-                .Trim();
-        }
-        video.Tags = videoTags;
-
-        // Add creator to the database if it doesn't exist
-        var existingCreator = dbContext.Creators
-            .FirstOrDefault(c => c.TikTokId == video.Creator.TikTokId);
-
-        if (existingCreator == null)
-        {
-            dbContext.Creators.Add(video.Creator);
-        }
-        else
-        {
-            video.Creator = existingCreator;
-        }
-
-        var outTpl = Path.Combine(videoDirectory, "%(id)s.%(ext)s");
-
-        var download = new ProcessStartInfo(tool)
-        {
-            Arguments = string.Empty,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        download.ArgumentList.Add("--no-warnings");
-        download.ArgumentList.Add("--no-playlist");
-        download.ArgumentList.Add("-o");
-        download.ArgumentList.Add(outTpl);
-        download.ArgumentList.Add(tiktokUrl);
-
-        using (var dp = Process.Start(download)!)
-        {
-            var _ = dp.StandardOutput.ReadToEnd();
-            dp.WaitForExit();
-            if (dp.ExitCode != 0)
-            {
-                logger.LogError($"Download failed for {videoId}: {err}");
-                throw new Exception("Video download failed");
-            }
-        }
-
-        // Add the video to the database
-        dbContext.Videos.Add(video);
-
-        dbContext.SaveChanges();
-
-        // Queue search index operation (non-blocking)
-        try
-        {
-            if (searchIndexQueue != null)
-            {
-                await searchIndexQueue.EnqueueAsync(SearchIndexOperationType.Index, video.TikTokVideoId);
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to queue search index operation for video {VideoId}", video.TikTokVideoId);
-        }
-
-        // Queue transcription if STT is enabled (non-blocking)
-        try
-        {
-            if (providerFactory != null && await providerFactory.IsEnabledAsync() && 
-                rabbitMQService != null && rabbitMQService.IsConnected)
-            {
-                var queueItem = new TranscriptionQueueItem
-                {
-                    VideoId = video.Id,
-                    Status = TranscriptionStatus.Pending,
-                    QueuedAt = DateTime.UtcNow,
-                    Provider = await providerFactory.GetConfiguredProviderTypeAsync()
-                };
-
-                dbContext.TranscriptionQueueItems.Add(queueItem);
-                await dbContext.SaveChangesAsync();
-
-                await rabbitMQService.PublishTranscriptionMessageAsync(video.Id, queueItem.Provider);
-                logger.LogInformation("Queued video {VideoId} for transcription", video.TikTokVideoId);
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to queue transcription for video {VideoId}", video.TikTokVideoId);
-        }
-
-        logger.LogInformation($"Video with ID {video.TikTokVideoId} added successfully.");
     }
 }

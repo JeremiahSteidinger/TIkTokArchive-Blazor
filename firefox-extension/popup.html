@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      font-size: 14px;
+      width: 320px;
+      margin: 0;
+      padding: 12px;
+      background: #1e1e2d;
+      color: #e0e0e0;
+    }
+    h1 { font-size: 15px; margin: 0 0 10px; }
+    label { display: block; font-size: 12px; color: #9e9eb3; margin-bottom: 4px; }
+    .row { display: flex; gap: 6px; margin-bottom: 12px; }
+    input[type="url"] {
+      flex: 1;
+      padding: 6px 8px;
+      border: 1px solid #3a3a4f;
+      border-radius: 4px;
+      background: #14141f;
+      color: #e0e0e0;
+    }
+    button {
+      padding: 6px 12px;
+      border: none;
+      border-radius: 4px;
+      background: #7c4dff;
+      color: white;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:hover { background: #6a3de8; }
+    button:disabled { background: #3a3a4f; color: #777; cursor: default; }
+    button.full { width: 100%; margin-bottom: 8px; }
+    #status { font-size: 12px; min-height: 16px; margin-top: 4px; color: #9e9eb3; word-break: break-word; }
+    #status.error { color: #ff6b6b; }
+    #status.ok { color: #69db7c; }
+    #cookieInfo { font-size: 11px; color: #6e6e85; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>TikTok Archive</h1>
+
+  <label for="appUrl">Archive URL (e.g. http://192.168.1.10:8080)</label>
+  <div class="row">
+    <input type="url" id="appUrl" placeholder="http://host:8080" />
+    <button id="saveBtn">Save</button>
+  </div>
+
+  <button id="archiveBtn" class="full" disabled>Archive this video</button>
+  <button id="syncBtn" class="full">Sync TikTok cookies</button>
+
+  <div id="status"></div>
+  <div id="cookieInfo"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -3,20 +3,27 @@ using TikTokArchive.Entities;
 
 namespace TikTokArchive.Web.Services
 {
+    /// <summary>
+    /// Periodic reconciliation between the database and the search index. With the
+    /// transactional outbox handling normal writes, this is a safety net for drift
+    /// (e.g., a wiped OpenSearch volume or the initial population of a new index).
+    /// It enqueues outbox rows rather than touching the index directly, and skips
+    /// videos that already have a pending row so retrying operations are not duplicated.
+    /// </summary>
     public class SearchSyncBackgroundService : BackgroundService
     {
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<SearchSyncBackgroundService> _logger;
-        private readonly SearchIndexQueue _queue;
+        private readonly SearchIndexSignal _signal;
 
         public SearchSyncBackgroundService(
             IServiceProvider serviceProvider,
             ILogger<SearchSyncBackgroundService> logger,
-            SearchIndexQueue queue)
+            SearchIndexSignal signal)
         {
             _serviceProvider = serviceProvider;
             _logger = logger;
-            _queue = queue;
+            _signal = signal;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -78,26 +85,55 @@ namespace TikTokArchive.Web.Services
                     .Select(v => v.TikTokVideoId)
                     .ToListAsync(cancellationToken);
 
-                var indexedVideoIds = await searchService.GetIndexedVideoIdsAsync();
+                // Throws if the index can't be enumerated, so a transient failure skips
+                // the cycle instead of being mistaken for an empty index.
+                var indexedVideoIds = await searchService.GetIndexedVideoIdsAsync(cancellationToken);
 
-                var missingFromIndex = dbVideoIds.Except(indexedVideoIds).ToList();
-                var missingFromDb = indexedVideoIds.Except(dbVideoIds).ToList();
+                var pendingVideoIds = (await dbContext.SearchIndexOperations
+                    .Select(o => o.VideoId)
+                    .ToListAsync(cancellationToken)).ToHashSet();
+
+                var missingFromIndex = dbVideoIds.Except(indexedVideoIds)
+                    .Where(id => !pendingVideoIds.Contains(id))
+                    .ToList();
+                var missingFromDb = indexedVideoIds.Except(dbVideoIds)
+                    .Where(id => !pendingVideoIds.Contains(id))
+                    .ToList();
 
                 _logger.LogInformation(
                     "Sync found {MissingFromIndex} videos to index and {MissingFromDb} to remove",
                     missingFromIndex.Count, missingFromDb.Count);
 
+                if (missingFromIndex.Count == 0 && missingFromDb.Count == 0) return;
+
                 foreach (var videoId in missingFromIndex)
                 {
-                    await _queue.EnqueueAsync(SearchIndexOperationType.Index, videoId);
+                    dbContext.SearchIndexOperations.Add(new SearchIndexOperation
+                    {
+                        OperationType = SearchIndexOperationType.Index,
+                        VideoId = videoId,
+                        CreatedAt = DateTime.UtcNow
+                    });
                 }
 
                 foreach (var videoId in missingFromDb)
                 {
-                    await _queue.EnqueueAsync(SearchIndexOperationType.Delete, videoId);
+                    dbContext.SearchIndexOperations.Add(new SearchIndexOperation
+                    {
+                        OperationType = SearchIndexOperationType.Delete,
+                        VideoId = videoId,
+                        CreatedAt = DateTime.UtcNow
+                    });
                 }
 
+                await dbContext.SaveChangesAsync(cancellationToken);
+                _signal.Notify();
+
                 _logger.LogInformation("Search index sync completed");
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
