@@ -37,12 +37,21 @@ namespace TikTokArchive.Web
                 connectionString += ";Keepalive=30;";
             }
 
-            builder.Services.AddDbContext<TikTokArchiveDbContext>(options =>
+            // Blazor Server keeps a single DI scope per circuit, so a plain scoped DbContext is
+            // shared across every operation on a page. Overlapping async work (e.g. the videos
+            // page's status-poll timer firing while a button-click runs an ExecuteUpdate) would
+            // then hit the same context concurrently and throw "a second operation was started on
+            // this context". Register a factory so hot paths can take a fresh context per call,
+            // and resolve the scoped DbContext from that same factory so existing scoped consumers
+            // (controllers, background-worker scopes, startup migration) keep working unchanged.
+            builder.Services.AddDbContextFactory<TikTokArchiveDbContext>(options =>
                 options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString),
                     mySqlOptions => mySqlOptions.EnableRetryOnFailure(
                         maxRetryCount: 5,
                         maxRetryDelay: TimeSpan.FromSeconds(10),
                         errorNumbersToAdd: null)));
+            builder.Services.AddScoped<TikTokArchiveDbContext>(sp =>
+                sp.GetRequiredService<IDbContextFactory<TikTokArchiveDbContext>>().CreateDbContext());
 
             builder.Services.Configure<MediaStorageOptions>(
                 builder.Configuration.GetSection(MediaStorageOptions.SectionName));
