@@ -33,22 +33,26 @@ namespace TikTokArchive.Web.Services
 
     public class AiEnrichmentService : IAiEnrichmentService
     {
-        private readonly TikTokArchiveDbContext _dbContext;
+        private readonly IDbContextFactory<TikTokArchiveDbContext> _dbContextFactory;
         private readonly AiEnrichmentSignal _signal;
+        private readonly TranscriptionSignal _transcriptionSignal;
         private readonly SearchIndexSignal _searchSignal;
 
         public AiEnrichmentService(
-            TikTokArchiveDbContext dbContext,
+            IDbContextFactory<TikTokArchiveDbContext> dbContextFactory,
             AiEnrichmentSignal signal,
+            TranscriptionSignal transcriptionSignal,
             SearchIndexSignal searchSignal)
         {
-            _dbContext = dbContext;
+            _dbContextFactory = dbContextFactory;
             _signal = signal;
+            _transcriptionSignal = transcriptionSignal;
             _searchSignal = searchSignal;
         }
 
         public async Task<Dictionary<AiSummaryStatus, int>> GetStatusCountsAsync(CancellationToken ct = default)
         {
+            await using var _dbContext = await _dbContextFactory.CreateDbContextAsync(ct);
             var counts = await _dbContext.Videos
                 .GroupBy(v => v.AiSummaryStatus)
                 .Select(g => new { Status = g.Key, Count = g.Count() })
@@ -65,6 +69,7 @@ namespace TikTokArchive.Web.Services
 
         public async Task<bool> QueueAsync(string videoId, CancellationToken ct = default)
         {
+            await using var _dbContext = await _dbContextFactory.CreateDbContextAsync(ct);
             var affected = await _dbContext.Videos
                 .Where(v => v.TikTokVideoId == videoId)
                 .ExecuteUpdateAsync(s => s
@@ -73,16 +78,37 @@ namespace TikTokArchive.Web.Services
                     .SetProperty(v => v.AiSummaryLastAttempt, (DateTime?)null)
                     .SetProperty(v => v.AiSummaryErrorMessage, (string?)null), ct);
 
-            if (affected > 0)
+            if (affected == 0)
             {
-                _signal.Notify();
+                return false;
             }
 
-            return affected > 0;
+            // The enrichment worker only claims videos whose transcript has Completed/Skipped.
+            // A back-catalog video that was never transcribed (NotRequested) would otherwise sit
+            // Pending forever, so kick off its transcription now; the worker enriches it once the
+            // transcript stage finishes — the same transcribe→summarize pipeline new videos run.
+            // Skipped/Failed transcripts are left alone (they have their own delete/retry paths).
+            var transcriptQueued = await _dbContext.Videos
+                .Where(v => v.TikTokVideoId == videoId
+                         && v.TranscriptStatus == TranscriptStatus.NotRequested)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(v => v.TranscriptStatus, TranscriptStatus.Pending)
+                    .SetProperty(v => v.TranscriptRetryCount, 0)
+                    .SetProperty(v => v.TranscriptLastAttempt, (DateTime?)null)
+                    .SetProperty(v => v.TranscriptErrorMessage, (string?)null), ct);
+
+            _signal.Notify();
+            if (transcriptQueued > 0)
+            {
+                _transcriptionSignal.Notify();
+            }
+
+            return true;
         }
 
         public async Task<bool> DeleteSummaryAsync(string videoId, CancellationToken ct = default)
         {
+            await using var _dbContext = await _dbContextFactory.CreateDbContextAsync(ct);
             var video = await _dbContext.Videos.FirstOrDefaultAsync(v => v.TikTokVideoId == videoId, ct);
             if (video == null)
             {
@@ -116,6 +142,7 @@ namespace TikTokArchive.Web.Services
 
         private async Task<int> ResetFromAsync(AiSummaryStatus from, CancellationToken ct)
         {
+            await using var _dbContext = await _dbContextFactory.CreateDbContextAsync(ct);
             var affected = await _dbContext.Videos
                 .Where(v => v.AiSummaryStatus == from)
                 .ExecuteUpdateAsync(s => s

@@ -37,18 +37,18 @@ namespace TikTokArchive.Web.Services
 
     public class TranscriptionService : ITranscriptionService
     {
-        private readonly TikTokArchiveDbContext _dbContext;
+        private readonly IDbContextFactory<TikTokArchiveDbContext> _dbContextFactory;
         private readonly TranscriptionSignal _signal;
         private readonly SearchIndexSignal _searchSignal;
         private readonly SpeechToTextOptions _options;
 
         public TranscriptionService(
-            TikTokArchiveDbContext dbContext,
+            IDbContextFactory<TikTokArchiveDbContext> dbContextFactory,
             TranscriptionSignal signal,
             SearchIndexSignal searchSignal,
             IOptions<SpeechToTextOptions> options)
         {
-            _dbContext = dbContext;
+            _dbContextFactory = dbContextFactory;
             _signal = signal;
             _searchSignal = searchSignal;
             _options = options.Value;
@@ -58,6 +58,7 @@ namespace TikTokArchive.Web.Services
 
         public async Task<Dictionary<TranscriptStatus, int>> GetStatusCountsAsync(CancellationToken ct = default)
         {
+            await using var _dbContext = await _dbContextFactory.CreateDbContextAsync(ct);
             var counts = await _dbContext.Videos
                 .GroupBy(v => v.TranscriptStatus)
                 .Select(g => new { Status = g.Key, Count = g.Count() })
@@ -74,6 +75,7 @@ namespace TikTokArchive.Web.Services
 
         public async Task<bool> QueueAsync(string videoId, CancellationToken ct = default)
         {
+            await using var _dbContext = await _dbContextFactory.CreateDbContextAsync(ct);
             var affected = await _dbContext.Videos
                 .Where(v => v.TikTokVideoId == videoId)
                 .ExecuteUpdateAsync(s => s
@@ -92,6 +94,7 @@ namespace TikTokArchive.Web.Services
 
         public async Task<bool> DeleteTranscriptAsync(string videoId, CancellationToken ct = default)
         {
+            await using var _dbContext = await _dbContextFactory.CreateDbContextAsync(ct);
             var video = await _dbContext.Videos.FirstOrDefaultAsync(v => v.TikTokVideoId == videoId, ct);
             if (video == null)
             {
@@ -120,6 +123,7 @@ namespace TikTokArchive.Web.Services
 
         private async Task<int> ResetFromAsync(TranscriptStatus from, CancellationToken ct)
         {
+            await using var _dbContext = await _dbContextFactory.CreateDbContextAsync(ct);
             var affected = await _dbContext.Videos
                 .Where(v => v.TranscriptStatus == from)
                 .ExecuteUpdateAsync(s => s

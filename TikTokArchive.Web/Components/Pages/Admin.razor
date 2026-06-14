@@ -471,8 +471,9 @@ else if (activeTab == 3)
     <div class="card">
         <div class="mb-4 flex flex-wrap items-center gap-2">
             <h2 class="flex-1 text-base font-semibold text-ink">AI Enrichment Queue</h2>
-            <button class="btn btn-ghost" @onclick="LoadAiEnrichmentData">
-                <Icon Name="refresh" Class="size-4" /> Refresh
+            <button class="btn btn-ghost" @onclick="RefreshAiEnrichmentData" disabled="@aiRefreshing">
+                <Icon Name="refresh" Class="@($"size-4 {(aiRefreshing ? "animate-spin" : "")}")" />
+                @(aiRefreshing ? "Refreshing…" : "Refresh")
             </button>
         </div>
 
@@ -678,6 +679,7 @@ else if (activeTab == 3)
     private List<AiRow> aiVideos = new();
     private int aiPage = 1;
     private const int aiPageSize = 25;
+    private bool aiRefreshing;
 
     // Error dialog state (replaces MudBlazor's IDialogService)
     private bool showErrorDialog = false;
@@ -1087,6 +1089,29 @@ else if (activeTab == 3)
         {
             Toast.Show($"Error loading AI enrichment queue: {ex.Message}", ToastSeverity.Error);
         }
+    }
+
+    // Wraps the (usually instant) reload so the button gives visible feedback: the icon spins
+    // for at least a second — long enough to register the click and confirm a refresh happened —
+    // while the data loads concurrently. A toast confirms completion.
+    private async Task RefreshAiEnrichmentData()
+    {
+        if (aiRefreshing)
+        {
+            return;
+        }
+
+        aiRefreshing = true;
+        try
+        {
+            await Task.WhenAll(LoadAiEnrichmentData(), Task.Delay(1000));
+        }
+        finally
+        {
+            aiRefreshing = false;
+        }
+
+        Toast.Show("AI enrichment queue refreshed", ToastSeverity.Success);
     }
 
     private async Task SetAiFilter(string key)
