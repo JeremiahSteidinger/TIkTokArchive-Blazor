@@ -12,15 +12,18 @@ namespace TikTokArchive.Web.Controllers
         private readonly TikTokArchiveDbContext _dbContext;
         private readonly ReindexCoordinator _reindexCoordinator;
         private readonly ITranscriptionService _transcriptionService;
+        private readonly IAiEnrichmentService _aiEnrichmentService;
 
         public AdminController(
             TikTokArchiveDbContext dbContext,
             ReindexCoordinator reindexCoordinator,
-            ITranscriptionService transcriptionService)
+            ITranscriptionService transcriptionService,
+            IAiEnrichmentService aiEnrichmentService)
         {
             _dbContext = dbContext;
             _reindexCoordinator = reindexCoordinator;
             _transcriptionService = transcriptionService;
+            _aiEnrichmentService = aiEnrichmentService;
         }
 
         [HttpGet("config")]
@@ -166,6 +169,63 @@ namespace TikTokArchive.Web.Controllers
         {
             var count = await _transcriptionService.BackfillAsync();
             return Ok(new { message = $"Queued {count} video(s) for transcription", count });
+        }
+
+        [HttpGet("ai-summary/status")]
+        public async Task<IActionResult> GetAiSummaryStatus()
+        {
+            var counts = await _aiEnrichmentService.GetStatusCountsAsync();
+
+            var recentFailures = await _dbContext.Videos
+                .Where(v => v.AiSummaryStatus == AiSummaryStatus.Failed)
+                .OrderByDescending(v => v.AiSummaryLastAttempt)
+                .Take(10)
+                .Select(v => new
+                {
+                    videoId = v.TikTokVideoId,
+                    retryCount = v.AiSummaryRetryCount,
+                    errorMessage = v.AiSummaryErrorMessage,
+                    lastAttempt = v.AiSummaryLastAttempt
+                })
+                .ToListAsync();
+
+            return Ok(new
+            {
+                counts = counts.ToDictionary(c => c.Key.ToString(), c => c.Value),
+                recentFailures
+            });
+        }
+
+        [HttpPost("ai-summary/queue/{videoId}")]
+        public async Task<IActionResult> QueueAiSummary(string videoId)
+        {
+            var queued = await _aiEnrichmentService.QueueAsync(videoId);
+            return queued
+                ? Ok(new { message = $"Queued {videoId} for AI enrichment" })
+                : NotFound(new { message = $"Video {videoId} not found" });
+        }
+
+        [HttpPost("ai-summary/{videoId}/delete")]
+        public async Task<IActionResult> DeleteAiSummary(string videoId)
+        {
+            var deleted = await _aiEnrichmentService.DeleteSummaryAsync(videoId);
+            return deleted
+                ? Ok(new { message = $"Deleted AI summary and tags for {videoId}" })
+                : NotFound(new { message = $"Video {videoId} not found" });
+        }
+
+        [HttpPost("ai-summary/retry-failed")]
+        public async Task<IActionResult> RetryFailedAiSummaries()
+        {
+            var count = await _aiEnrichmentService.RetryFailedAsync();
+            return Ok(new { message = $"Requeued {count} failed enrichment(s)", count });
+        }
+
+        [HttpPost("ai-summary/backfill")]
+        public async Task<IActionResult> BackfillAiSummaries()
+        {
+            var count = await _aiEnrichmentService.BackfillAsync();
+            return Ok(new { message = $"Queued {count} video(s) for AI enrichment", count });
         }
     }
 

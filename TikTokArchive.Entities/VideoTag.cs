@@ -15,5 +15,8 @@ namespace TikTokArchive.Entities
         
         public int TagId { get; set; }
         public virtual Tag Tag { get; set; }
+
+        /// <summary>Provenance of this association: a TikTok hashtag or an AI-suggested tag.</summary>
+        public TagSource Source { get; set; }
     }
 }

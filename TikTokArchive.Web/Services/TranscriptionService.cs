@@ -105,12 +105,7 @@ namespace TikTokArchive.Web.Services
             video.TranscriptStatus = TranscriptStatus.Skipped;
 
             // Re-index in the same SaveChanges so the transcript also drops out of search.
-            _dbContext.SearchIndexOperations.Add(new SearchIndexOperation
-            {
-                OperationType = SearchIndexOperationType.Index,
-                VideoId = videoId,
-                CreatedAt = DateTime.UtcNow
-            });
+            await SearchIndexOutbox.EnqueueIndexAsync(_dbContext, videoId, ct);
 
             await _dbContext.SaveChangesAsync(ct);
             _searchSignal.Notify();
