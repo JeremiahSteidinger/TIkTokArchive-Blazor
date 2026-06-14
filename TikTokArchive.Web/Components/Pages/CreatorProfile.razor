@@ -1,0 +1,302 @@
+@page "/creator/{Id:int}"
+@inject TikTokArchive.Web.Services.IVideoService VideoService
+@inject NavigationManager Nav
+@using TikTokArchive.Entities
+@using TikTokArchive.Web.Services
+@implements IDisposable
+
+<PageTitle>@(creator?.DisplayName ?? "Creator")</PageTitle>
+
+<div class="space-y-4">
+    <a href="@backUrl" class="inline-flex items-center gap-1 text-sm text-muted transition-colors hover:text-ink">
+        <Icon Name="chevron-left" Class="size-4" /> @backLabel
+    </a>
+
+    @if (isLoading && creator == null)
+    {
+        <div class="mt-8 flex justify-center">
+            <span class="spinner size-8"></span>
+        </div>
+    }
+    else if (creator == null)
+    {
+        <div class="alert alert-info items-center">
+            <Icon Name="info" Class="size-5 shrink-0 text-sky-500" />
+            <span>Creator not found.</span>
+        </div>
+    }
+    else
+    {
+        <!-- Profile header -->
+        <div class="card">
+            <div class="flex items-center gap-4">
+                <div class="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-surface-2 text-2xl font-semibold text-muted">
+                    @if (creator.ProfilePicture is { Length: > 0 })
+                    {
+                        <img src="@ProfilePictureDataUrl(creator.ProfilePicture)" alt="@creator.DisplayName" class="size-full object-cover" />
+                    }
+                    else
+                    {
+                        @InitialOf(creator.DisplayName)
+                    }
+                </div>
+                <div class="min-w-0">
+                    <h1 class="truncate text-xl font-semibold text-ink">@creator.DisplayName</h1>
+                    <p class="truncate text-sm text-muted">@($"@{creator.TikTokId}")</p>
+                    <p class="mt-1 text-sm text-faint">@totalCount saved @(totalCount == 1 ? "video" : "videos")</p>
+                </div>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(selectedTag))
+        {
+            <div>
+                <span class="badge bg-sky-600 text-white">
+                    Filtered by: @selectedTag
+                    <button @onclick="ClearTagFilter" class="ml-1 text-sky-100 hover:text-white" aria-label="Clear filter">
+                        <Icon Name="close" Class="size-3.5" />
+                    </button>
+                </span>
+            </div>
+        }
+    }
+</div>
+
+@if (creator != null)
+{
+    @if (isLoading)
+    {
+        <div class="mt-8 flex justify-center">
+            <span class="spinner size-8"></span>
+        </div>
+    }
+    else
+    {
+        <div class="mt-6 space-y-5">
+            @if (!videos.Any())
+            {
+                <div class="alert alert-info items-center">
+                    <Icon Name="info" Class="size-5 shrink-0 text-sky-500" />
+                    @if (!string.IsNullOrEmpty(selectedTag))
+                    {
+                        <span>No videos found with tag "@selectedTag".</span>
+                    }
+                    else
+                    {
+                        <span>No videos found.</span>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-5">
+                    @foreach (var video in videos)
+                    {
+                        <VideoCard Video="video"
+                                   SelectedTag="selectedTag"
+                                   ShowCreatorLink="false"
+                                   OnTagSelected="FilterByTag"
+                                   OnWorkQueued="StartStatusPolling"
+                                   OnDeleted="HandleVideoDeleted" />
+                    }
+                </div>
+
+                <Pagination CurrentPage="currentPage" TotalPages="totalPages" PageSize="pageSize"
+                            TotalItems="matchingCount" PageUrl="PageUrl" ItemNoun="videos" />
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+    [SupplyParameterFromQuery] public int? Page { get; set; }
+    // Where the user arrived from, so the back link points there. Defaults to the videos page.
+    [SupplyParameterFromQuery] public string? From { get; set; }
+
+    private string backUrl => From == "creators" ? "/creators" : "/videos";
+    private string backLabel => From == "creators" ? "All creators" : "All videos";
+
+    private Creator? creator;
+    private List<Video> videos = new();
+    private string? selectedTag;
+    private bool isLoading = true;
+    private int currentPage = 1;
+    private int pageSize = 20;
+    private int totalCount;     // creator's overall saved videos (header)
+    private int matchingCount;  // videos matching the current filter (drives paging)
+    private int totalPages => (int)Math.Ceiling(matchingCount / (double)pageSize);
+
+    private int loadedId;       // the creator id we last loaded, to detect navigation between creators
+    private System.Timers.Timer? statusPollTimer;
+
+    // Fires on first load, on ?page= changes (incl. browser back/forward), and when the route's
+    // creator id changes. Only a *new creator* clears the tag filter; paging keeps it.
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Id != loadedId)
+        {
+            loadedId = Id;
+            selectedTag = null;
+        }
+        currentPage = Page is int p && p > 0 ? p : 1;
+        await LoadProfile();
+    }
+
+    private string PageUrl(int page)
+    {
+        var url = page <= 1 ? $"creator/{Id}" : $"creator/{Id}?page={page}";
+        if (string.IsNullOrEmpty(From)) return url;
+        return $"{url}{(url.Contains('?') ? '&' : '?')}from={From}";
+    }
+
+    // showLoading is suppressed for background status refreshes so the grid isn't briefly
+    // replaced by the loading spinner while a poll re-fetches the page.
+    private async Task LoadProfile(bool showLoading = true)
+    {
+        if (showLoading)
+        {
+            isLoading = true;
+        }
+
+        try
+        {
+            var result = await VideoService.GetCreatorProfileAsync(Id, currentPage, pageSize, selectedTag);
+            if (result == null)
+            {
+                creator = null;
+                videos = new List<Video>();
+                totalCount = 0;
+                matchingCount = 0;
+                return;
+            }
+
+            creator = result.Creator;
+            videos = result.Videos;
+            totalCount = result.TotalCount;
+            matchingCount = result.MatchingCount;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading creator profile: {ex.Message}");
+            videos = new List<Video>();
+            matchingCount = 0;
+        }
+        finally
+        {
+            if (showLoading)
+            {
+                isLoading = false;
+            }
+        }
+
+        // (Re)start polling if any visible video is still being transcribed or enriched.
+        StartStatusPolling();
+    }
+
+    // A tag-filter change resets to page 1. If we're past page 1, navigate so the URL drops the
+    // stale ?page= (which reloads via OnParametersSetAsync); otherwise just reload in place.
+    private async Task ResetToFirstPage()
+    {
+        if (currentPage != 1)
+        {
+            Nav.NavigateTo(PageUrl(1));
+        }
+        else
+        {
+            await LoadProfile();
+        }
+    }
+
+    private async Task FilterByTag(string tag)
+    {
+        selectedTag = tag;
+        await ResetToFirstPage();
+    }
+
+    private async Task ClearTagFilter()
+    {
+        selectedTag = null;
+        await ResetToFirstPage();
+    }
+
+    private async Task HandleVideoDeleted()
+    {
+        // The card already deleted the video and showed a toast; we just fix up paging.
+        if (videos.Count == 1 && currentPage > 1)
+        {
+            // Removed the only card on this page — drop back a page (updates the URL too).
+            Nav.NavigateTo(PageUrl(currentPage - 1));
+        }
+        else
+        {
+            await LoadProfile();
+        }
+    }
+
+    // --- Live status polling (mirrors the videos page): keep transcript / AI icons live
+    // for any card whose work is still queued, so they update as the workers finish. ---
+    private bool HasPendingWork() =>
+        videos.Any(v => v.TranscriptStatus == TranscriptStatus.Pending
+                     || v.AiSummaryStatus == AiSummaryStatus.Pending);
+
+    private void StartStatusPolling()
+    {
+        if (statusPollTimer != null || !HasPendingWork()) return;
+
+        statusPollTimer = new System.Timers.Timer(3000);
+        statusPollTimer.Elapsed += async (sender, args) => await InvokeAsync(RefreshStatusesAsync);
+        statusPollTimer.Start();
+    }
+
+    private void StopStatusPolling()
+    {
+        statusPollTimer?.Stop();
+        statusPollTimer?.Dispose();
+        statusPollTimer = null;
+    }
+
+    private async Task RefreshStatusesAsync()
+    {
+        var ids = videos.Select(v => v.TikTokVideoId).ToList();
+        if (ids.Count == 0)
+        {
+            StopStatusPolling();
+            return;
+        }
+
+        List<VideoStatus> statuses;
+        try
+        {
+            statuses = await VideoService.GetStatusesAsync(ids);
+        }
+        catch
+        {
+            return; // transient DB hiccup — try again on the next tick
+        }
+
+        var statusById = statuses.ToDictionary(s => s.VideoId);
+        var changed = videos.Any(v =>
+            statusById.TryGetValue(v.TikTokVideoId, out var s)
+            && (s.TranscriptStatus != v.TranscriptStatus || s.AiSummaryStatus != v.AiSummaryStatus));
+
+        if (changed)
+        {
+            await LoadProfile(showLoading: false);
+            StateHasChanged();
+        }
+
+        if (!HasPendingWork())
+        {
+            StopStatusPolling();
+        }
+    }
+
+    public void Dispose() => statusPollTimer?.Dispose();
+
+    private static string InitialOf(string? name) =>
+        string.IsNullOrWhiteSpace(name) ? "?" : name.Trim()[..1].ToUpperInvariant();
+
+    private static string ProfilePictureDataUrl(byte[] data) =>
+        $"data:image/jpeg;base64,{Convert.ToBase64String(data)}";
+}

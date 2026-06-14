@@ -1,0 +1,300 @@
+@* A single video card: player, creator, description, summary, tags and the
+   transcript / AI-enrichment / download / delete actions. Self-contained — it owns its
+   transcript dialog and talks to the services directly. The parent page only reacts to
+   deletions (to fix paging), queued work (to keep status polling alive) and tag clicks. *@
+@using TikTokArchive.Entities
+@inject IVideoService VideoService
+@inject ITranscriptionService TranscriptionSvc
+@inject IAiEnrichmentService AiEnrichmentSvc
+@inject ToastService Toast
+@inject IJSRuntime JSRuntime
+
+<div class="flex flex-col overflow-hidden rounded-xl border border-line bg-surface">
+    <div class="p-3">
+        @if (!string.IsNullOrWhiteSpace(Video.TikTokVideoId))
+        {
+            var videoUrl = $"/api/video/{Video.TikTokVideoId}/stream";
+            var posterUrl = $"/api/video/{Video.TikTokVideoId}/thumbnail";
+            <video id="@Video.Id"
+                   controls
+                   preload="metadata"
+                   class="w-full rounded-lg bg-black"
+                   poster="@posterUrl">
+                <source src="@videoUrl" type="video/mp4" />
+                Your browser does not support the video tag.
+            </video>
+        }
+        @if (ShowCreatorLink && Video.Creator != null)
+        {
+            <a href="@($"/creator/{Video.Creator.Id}")"
+               class="mt-3 inline-block text-sm font-semibold text-ink transition-colors hover:text-sky-500">
+                @Video.Creator.DisplayName
+            </a>
+        }
+        else
+        {
+            <p class="mt-3 text-sm font-semibold text-ink">@Video.Creator?.DisplayName</p>
+        }
+        <p class="mt-1 text-sm text-muted">@Video.Description</p>
+        @if (!string.IsNullOrWhiteSpace(Video.Summary))
+        {
+            <p class="mt-2 flex gap-1.5 text-sm italic text-faint">
+                <Icon Name="sparkles" Class="size-4 shrink-0 text-violet-500" />
+                <span>@Video.Summary</span>
+            </p>
+        }
+        @if (Video.Tags.Any())
+        {
+            <div class="mt-3 flex flex-wrap gap-1.5">
+                @foreach (var tag in Video.Tags)
+                {
+                    @if (tag.Source == TagSource.Ai)
+                    {
+                        <span class="chip chip-ai" title="AI-generated tag">
+                            <button class="inline-flex items-center gap-1"
+                                    @onclick="@(() => FilterByTag(tag.Tag.Name))">
+                                <Icon Name="sparkles" Class="size-3" />@tag.Tag.Name
+                            </button>
+                            <button class="-mr-1 ml-0.5 rounded-full p-0.5 hover:bg-violet-500/25"
+                                    @onclick="@(() => RemoveAiTag(tag))"
+                                    title="Remove AI tag" aria-label="Remove AI tag">
+                                <Icon Name="close" Class="size-3" />
+                            </button>
+                        </span>
+                    }
+                    else
+                    {
+                        var tagActive = SelectedTag == tag.Tag.Name;
+                        <button class="@($"chip {(tagActive ? "bg-rose-600 text-white" : "bg-surface-2 text-sky-700 hover:text-sky-500 dark:text-sky-300 dark:hover:text-sky-200")}")"
+                                @onclick="@(() => FilterByTag(tag.Tag.Name))">
+                            #@tag.Tag.Name
+                        </button>
+                    }
+                }
+            </div>
+        }
+    </div>
+    <div class="mt-auto flex items-center justify-between border-t border-line px-3 py-2">
+        <div class="flex items-center gap-1">
+            <a class="icon-btn" href="@GetDownloadUrl(Video.TikTokVideoId)" target="_blank" title="Download video">
+                <Icon Name="download" />
+            </a>
+            @switch (Video.TranscriptStatus)
+            {
+                case TranscriptStatus.Completed:
+                    <button class="@($"icon-btn {(IsLowConfidence() ? "text-amber-500 hover:bg-amber-500/10" : "text-emerald-500 hover:bg-emerald-500/10")}")"
+                            @onclick="ShowTranscript"
+                            title="@(IsLowConfidence() ? "Transcript (low confidence) — click to view" : "View transcript")">
+                        <Icon Name="document-text" />
+                    </button>
+                    break;
+                case TranscriptStatus.Pending:
+                    <span class="icon-btn cursor-default text-amber-500" title="Queued for transcription">
+                        <Icon Name="clock" />
+                    </span>
+                    break;
+                case TranscriptStatus.Failed:
+                    <button class="icon-btn text-rose-500 hover:bg-rose-500/10"
+                            @onclick="QueueTranscription" title="Transcription failed — click to retry">
+                        <Icon Name="refresh" />
+                    </button>
+                    break;
+                case TranscriptStatus.Skipped:
+                    <button class="icon-btn text-muted hover:bg-surface-2"
+                            @onclick="QueueTranscription" title="No audio / skipped — click to transcribe again">
+                        <Icon Name="speaker-x" />
+                    </button>
+                    break;
+                default: // NotRequested
+                    <button class="icon-btn hover:bg-sky-500/10 hover:text-sky-500"
+                            @onclick="QueueTranscription" title="Queue transcription">
+                        <Icon Name="microphone" />
+                    </button>
+                    break;
+            }
+            @switch (Video.AiSummaryStatus)
+            {
+                case AiSummaryStatus.Completed:
+                    <button class="icon-btn text-violet-500 hover:bg-violet-500/10"
+                            @onclick="QueueAiEnrichment"
+                            title="AI enriched — click to regenerate">
+                        <Icon Name="sparkles" />
+                    </button>
+                    break;
+                case AiSummaryStatus.Pending:
+                    <span class="icon-btn cursor-default text-amber-500" title="Queued for AI enrichment">
+                        <Icon Name="clock" />
+                    </span>
+                    break;
+                case AiSummaryStatus.Failed:
+                    <button class="icon-btn text-rose-500 hover:bg-rose-500/10"
+                            @onclick="QueueAiEnrichment" title="AI enrichment failed — click to retry">
+                        <Icon Name="refresh" />
+                    </button>
+                    break;
+                case AiSummaryStatus.Skipped:
+                    <button class="icon-btn text-muted hover:bg-violet-500/10 hover:text-violet-500"
+                            @onclick="QueueAiEnrichment" title="AI enrichment skipped — click to enrich again">
+                        <Icon Name="sparkles" />
+                    </button>
+                    break;
+                default: // NotRequested
+                    <button class="icon-btn hover:bg-violet-500/10 hover:text-violet-500"
+                            @onclick="QueueAiEnrichment" title="Queue AI enrichment">
+                        <Icon Name="sparkles" />
+                    </button>
+                    break;
+            }
+        </div>
+        <button class="icon-btn hover:bg-rose-500/10 hover:text-rose-500"
+                @onclick="DeleteVideo" title="Delete video">
+            <Icon Name="trash" />
+        </button>
+    </div>
+</div>
+
+@if (showTranscriptDialog)
+{
+    <TranscriptDialog Title="@transcriptDialogTitle"
+                      Transcript="@Video.Transcript"
+                      Confidence="@Video.TranscriptConfidence"
+                      IsLowConfidence="@IsLowConfidence()"
+                      OnClose="@(() => showTranscriptDialog = false)"
+                      OnDelete="@DeleteTranscript" />
+}
+
+@code {
+    [Parameter, EditorRequired] public Video Video { get; set; } = default!;
+
+    /// <summary>The tag the parent is currently filtering by, so the matching chip is highlighted.</summary>
+    [Parameter] public string? SelectedTag { get; set; }
+
+    /// <summary>Render the creator name as a link to their profile. Off on the profile page itself.</summary>
+    [Parameter] public bool ShowCreatorLink { get; set; } = true;
+
+    /// <summary>Raised after the card deletes its video, so the parent can reload / fix paging.</summary>
+    [Parameter] public EventCallback OnDeleted { get; set; }
+
+    /// <summary>Raised when transcription/AI enrichment is queued, so the parent keeps polling alive.</summary>
+    [Parameter] public EventCallback OnWorkQueued { get; set; }
+
+    /// <summary>Raised when a tag chip is clicked; the parent decides how to filter.</summary>
+    [Parameter] public EventCallback<string> OnTagSelected { get; set; }
+
+    private bool showTranscriptDialog;
+    private string transcriptDialogTitle = string.Empty;
+
+    private static string GetDownloadUrl(string videoId) => $"/api/video/{videoId}/download";
+
+    private bool IsLowConfidence() =>
+        Video.TranscriptConfidence is double c && c < TranscriptionSvc.LowConfidenceThreshold;
+
+    private Task FilterByTag(string tag) => OnTagSelected.InvokeAsync(tag);
+
+    private async Task RemoveAiTag(VideoTag tag)
+    {
+        try
+        {
+            if (await VideoService.RemoveTagFromVideoAsync(Video.TikTokVideoId, tag.TagId))
+            {
+                // Drop it from the in-memory list so the chip disappears without a reload.
+                Video.Tags = Video.Tags.Where(t => t.TagId != tag.TagId).ToList();
+                Toast.Show("AI tag removed", ToastSeverity.Success);
+            }
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error removing tag: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private async Task QueueTranscription()
+    {
+        try
+        {
+            if (await TranscriptionSvc.QueueAsync(Video.TikTokVideoId))
+            {
+                // Reflect the new state immediately; the worker processes it in the background.
+                Video.TranscriptStatus = TranscriptStatus.Pending;
+                Toast.Show("Queued for transcription", ToastSeverity.Success);
+                await OnWorkQueued.InvokeAsync(); // keep the card's icon live until the worker finishes
+            }
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error queueing transcription: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private async Task QueueAiEnrichment()
+    {
+        try
+        {
+            if (await AiEnrichmentSvc.QueueAsync(Video.TikTokVideoId))
+            {
+                // Reflect the new state immediately; the worker enriches once the transcript is
+                // ready (it may already be), in the background.
+                Video.AiSummaryStatus = AiSummaryStatus.Pending;
+                Toast.Show("Queued for AI enrichment", ToastSeverity.Success);
+                await OnWorkQueued.InvokeAsync(); // keep the card's icon live until the worker finishes
+            }
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error queueing AI enrichment: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private void ShowTranscript()
+    {
+        transcriptDialogTitle = string.IsNullOrWhiteSpace(Video.Creator?.DisplayName)
+            ? "Transcript"
+            : $"Transcript — {Video.Creator!.DisplayName}";
+        showTranscriptDialog = true;
+    }
+
+    private async Task DeleteTranscript()
+    {
+        if (!await JSRuntime.InvokeAsync<bool>("confirm",
+            "Delete this transcript? It will also be removed from search."))
+        {
+            return;
+        }
+
+        try
+        {
+            if (await TranscriptionSvc.DeleteTranscriptAsync(Video.TikTokVideoId))
+            {
+                // Reflect the cleared state in the card immediately.
+                Video.Transcript = null;
+                Video.TranscriptConfidence = null;
+                Video.TranscriptStatus = TranscriptStatus.Skipped;
+                showTranscriptDialog = false;
+                Toast.Show("Transcript deleted", ToastSeverity.Success);
+            }
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error deleting transcript: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private async Task DeleteVideo()
+    {
+        if (!await JSRuntime.InvokeAsync<bool>("confirm", $"Are you sure you want to delete video {Video.TikTokVideoId}?"))
+        {
+            return;
+        }
+
+        try
+        {
+            await VideoService.DeleteVideoAsync(Video.TikTokVideoId);
+            Toast.Show("Video deleted successfully", ToastSeverity.Success);
+            await OnDeleted.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error deleting video: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+}

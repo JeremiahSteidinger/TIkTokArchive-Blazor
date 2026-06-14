@@ -1,0 +1,93 @@
+@* Page navigation rendered as real <a> links (not buttons) so the browser back/forward
+   buttons return to the page you were on. The parent supplies PageUrl, a builder that turns a
+   page number into the URL for that page; Blazor intercepts the clicks as client-side navigations. *@
+
+@if (TotalPages > 1)
+{
+    <div class="flex flex-col items-center gap-2 pt-2">
+        <nav class="flex items-center gap-1">
+            @if (CurrentPage > 1)
+            {
+                <a class="icon-btn" href="@PageUrl(1)" title="First page">
+                    <Icon Name="chevron-double-left" Class="size-4" />
+                </a>
+                <a class="icon-btn" href="@PageUrl(CurrentPage - 1)" title="Previous page">
+                    <Icon Name="chevron-left" Class="size-4" />
+                </a>
+            }
+            else
+            {
+                <span class="icon-btn pointer-events-none opacity-40">
+                    <Icon Name="chevron-double-left" Class="size-4" />
+                </span>
+                <span class="icon-btn pointer-events-none opacity-40">
+                    <Icon Name="chevron-left" Class="size-4" />
+                </span>
+            }
+            @foreach (var pageNum in PageNumbers())
+            {
+                @if (pageNum == CurrentPage)
+                {
+                    <span class="inline-flex h-9 min-w-9 items-center justify-center rounded-lg bg-sky-600 px-3 text-sm font-medium text-white">
+                        @pageNum
+                    </span>
+                }
+                else
+                {
+                    <a class="inline-flex h-9 min-w-9 items-center justify-center rounded-lg px-3 text-sm font-medium text-muted transition-colors hover:bg-surface-2"
+                       href="@PageUrl(pageNum)">
+                        @pageNum
+                    </a>
+                }
+            }
+            @if (CurrentPage < TotalPages)
+            {
+                <a class="icon-btn" href="@PageUrl(CurrentPage + 1)" title="Next page">
+                    <Icon Name="chevron-right" Class="size-4" />
+                </a>
+                <a class="icon-btn" href="@PageUrl(TotalPages)" title="Last page">
+                    <Icon Name="chevron-double-right" Class="size-4" />
+                </a>
+            }
+            else
+            {
+                <span class="icon-btn pointer-events-none opacity-40">
+                    <Icon Name="chevron-right" Class="size-4" />
+                </span>
+                <span class="icon-btn pointer-events-none opacity-40">
+                    <Icon Name="chevron-double-right" Class="size-4" />
+                </span>
+            }
+        </nav>
+        <p class="text-xs text-faint">
+            Showing @From to @To of @TotalItems @ItemNoun
+        </p>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public int CurrentPage { get; set; }
+    [Parameter, EditorRequired] public int TotalPages { get; set; }
+    [Parameter, EditorRequired] public int PageSize { get; set; }
+    [Parameter, EditorRequired] public int TotalItems { get; set; }
+
+    /// <summary>Builds the URL for a given page number (e.g. p => $"videos?page={p}").</summary>
+    [Parameter, EditorRequired] public Func<int, string> PageUrl { get; set; } = _ => "";
+
+    /// <summary>Noun used in the "Showing X to Y of Z &lt;noun&gt;" summary.</summary>
+    [Parameter] public string ItemNoun { get; set; } = "items";
+
+    private int From => (CurrentPage - 1) * PageSize + 1;
+    private int To => Math.Min(CurrentPage * PageSize, TotalItems);
+
+    private IEnumerable<int> PageNumbers()
+    {
+        const int window = 2;
+        var start = Math.Max(1, CurrentPage - window);
+        var end = Math.Min(TotalPages, CurrentPage + window);
+        for (var i = start; i <= end; i++)
+        {
+            yield return i;
+        }
+    }
+}
