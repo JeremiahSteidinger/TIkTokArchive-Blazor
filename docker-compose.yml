@@ -10,6 +10,9 @@ services:
       - OpenSearch:Url=http://opensearch:9200
       - SpeechToText:Enabled=true
       - SpeechToText:Url=http://whisper-asr:9000
+      - AiEnrichment:Enabled=true
+      - AiEnrichment:Url=http://ollama:11434
+      - AiEnrichment:Model=llama3.2:3b
     volumes:
       - ./media:/media
       # Drop video files here and the local import service will ingest them.
@@ -17,8 +20,9 @@ services:
     depends_on:
       opensearch:
         condition: service_healthy
-      # No health condition on whisper-asr: the transcription worker's backoff absorbs the
-      # first-run model download, so app startup never blocks on the ASR container.
+      # No health condition on whisper-asr / ollama: the transcription and AI-enrichment
+      # workers' backoff absorbs the first-run model downloads, so app startup never blocks
+      # on those containers.
 
   opensearch:
     image: opensearchproject/opensearch:2
@@ -55,6 +59,40 @@ services:
       retries: 20
       start_period: 120s              # first start downloads the model (~150MB for base)
 
+  # Local LLM for AI summaries + tags. The app POSTs the transcript + caption and gets back a
+  # JSON object with a short summary and topical tags. CPU-only by default; for an NVIDIA GPU,
+  # uncomment the deploy block (and install the NVIDIA Container Toolkit on the host).
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama     # persist pulled models across restarts
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+
+  # One-shot: pull the enrichment model once the server is up so the stack is self-provisioning.
+  # Exits when the pull completes; re-running `docker compose up` is a no-op once cached.
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    command: ["pull", "llama3.2:3b"]
+    restart: "no"
+
 volumes:
   opensearch_data:
   whisper_cache:
+  ollama_data:

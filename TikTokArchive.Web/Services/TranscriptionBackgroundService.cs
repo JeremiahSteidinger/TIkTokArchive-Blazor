@@ -190,12 +190,8 @@ namespace TikTokArchive.Web.Services
                 {
                     // Re-index through the existing search outbox so the transcript becomes
                     // searchable — written in the same SaveChanges as the transcript itself.
-                    dbContext.SearchIndexOperations.Add(new SearchIndexOperation
-                    {
-                        OperationType = SearchIndexOperationType.Index,
-                        VideoId = video.TikTokVideoId,
-                        CreatedAt = DateTime.UtcNow
-                    });
+                    // Deduped so a video already waiting to be indexed doesn't pile up extra rows.
+                    await SearchIndexOutbox.EnqueueIndexAsync(dbContext, video.TikTokVideoId, cancellationToken);
                 }
 
                 await dbContext.SaveChangesAsync(cancellationToken);

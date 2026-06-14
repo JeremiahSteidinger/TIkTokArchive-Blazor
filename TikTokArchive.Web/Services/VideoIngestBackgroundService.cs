@@ -1,5 +1,3 @@
-using System.Globalization;
-using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using TikTokArchive.Entities;
@@ -19,6 +17,7 @@ namespace TikTokArchive.Web.Services
         private readonly IServiceProvider _serviceProvider;
         private readonly SearchIndexSignal _searchSignal;
         private readonly TranscriptionSignal _transcriptionSignal;
+        private readonly AiEnrichmentSignal _aiEnrichmentSignal;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly MediaStorageOptions _mediaOptions;
         private readonly ILogger<VideoIngestBackgroundService> _logger;
@@ -28,6 +27,7 @@ namespace TikTokArchive.Web.Services
             IServiceProvider serviceProvider,
             SearchIndexSignal searchSignal,
             TranscriptionSignal transcriptionSignal,
+            AiEnrichmentSignal aiEnrichmentSignal,
             IHttpClientFactory httpClientFactory,
             IOptions<MediaStorageOptions> mediaOptions,
             ILogger<VideoIngestBackgroundService> logger)
@@ -36,6 +36,7 @@ namespace TikTokArchive.Web.Services
             _serviceProvider = serviceProvider;
             _searchSignal = searchSignal;
             _transcriptionSignal = transcriptionSignal;
+            _aiEnrichmentSignal = aiEnrichmentSignal;
             _httpClientFactory = httpClientFactory;
             _mediaOptions = mediaOptions.Value;
             _logger = logger;
@@ -113,6 +114,8 @@ namespace TikTokArchive.Web.Services
                 await SaveVideoAsync(dbContext, metadata, cancellationToken);
                 _searchSignal.Notify();
                 _transcriptionSignal.Notify();
+                // Wakes the AI worker; it no-ops until the transcript completes, then enriches.
+                _aiEnrichmentSignal.Notify();
 
                 job.MarkCompleted();
                 _logger.LogInformation("Video {VideoId} added successfully", metadata.VideoId);
@@ -160,24 +163,9 @@ namespace TikTokArchive.Web.Services
                 .FirstOrDefaultAsync(c => c.TikTokId == metadata.Uploader, cancellationToken)
                 ?? new Creator { TikTokId = metadata.Uploader, DisplayName = metadata.Channel };
 
-            // Tag identity must follow the database's accent/case-insensitive collation,
-            // not ordinal string equality: "#françoisarnaud" and "#francoisarnaud" are
-            // the same tag to the unique index on Tag.Name. Existing tags are matched by
-            // letting MySQL compare; tags new in this batch are deduplicated with an
-            // accent-stripped key so a single description can't insert colliding rows.
-            var videoTags = new List<VideoTag>();
-            var tagsByKey = new Dictionary<string, Tag>();
-            foreach (var tagName in tagNames)
-            {
-                var key = AccentInsensitiveKey(tagName);
-                if (tagsByKey.ContainsKey(key)) continue;
-
-                var tag = await dbContext.Tags
-                    .FirstOrDefaultAsync(t => t.Name == tagName, cancellationToken)
-                    ?? new Tag { Name = tagName };
-                tagsByKey[key] = tag;
-                videoTags.Add(new VideoTag { Tag = tag });
-            }
+            // Resolve hashtags to Tag rows (accent/case-insensitively) as TikTok-sourced tags.
+            var videoTags = await TagUpsertHelper.BuildVideoTagsAsync(
+                dbContext, tagNames, TagSource.TikTok, cancellationToken: cancellationToken);
 
             var video = new Video
             {
@@ -198,21 +186,6 @@ namespace TikTokArchive.Web.Services
             });
 
             await dbContext.SaveChangesAsync(cancellationToken);
-        }
-
-        private static string AccentInsensitiveKey(string value)
-        {
-            var decomposed = value.Normalize(NormalizationForm.FormD);
-            var builder = new StringBuilder(decomposed.Length);
-            foreach (var c in decomposed)
-            {
-                if (CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
-                {
-                    builder.Append(c);
-                }
-            }
-
-            return builder.ToString().Normalize(NormalizationForm.FormC).ToLowerInvariant();
         }
 
         private void CleanUpMediaFiles(string? videoId)

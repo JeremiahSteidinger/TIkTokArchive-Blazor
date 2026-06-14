@@ -108,6 +108,29 @@ namespace TikTokArchive.Web
                 builder.Services.AddHostedService<TranscriptionBackgroundService>();
             }
 
+            // AI enrichment: a local LLM (Ollama) generates a short summary and AI tags from the
+            // transcript + description once transcription completes, then re-indexes through the
+            // search outbox. Same shape as speech-to-text: the signal and management service are
+            // always registered (so ingest's Notify() and the admin UI work when disabled); the
+            // LLM client + worker are gated behind the feature flag.
+            builder.Services.Configure<AiEnrichmentOptions>(
+                builder.Configuration.GetSection(AiEnrichmentOptions.SectionName));
+            builder.Services.AddSingleton<AiEnrichmentSignal>();
+            builder.Services.AddScoped<IAiEnrichmentService, AiEnrichmentService>();
+
+            if (builder.Configuration.GetValue<bool>("AiEnrichment:Enabled"))
+            {
+                builder.Services.AddHttpClient(OllamaVideoSummaryService.HttpClientName, (sp, client) =>
+                {
+                    var options = sp.GetRequiredService<IOptions<AiEnrichmentOptions>>().Value;
+                    client.BaseAddress = new Uri(options.Url.TrimEnd('/') + "/");
+                    // CPU inference of a small model takes seconds to tens of seconds.
+                    client.Timeout = TimeSpan.FromMinutes(options.TimeoutMinutes);
+                });
+                builder.Services.AddSingleton<IVideoSummaryService, OllamaVideoSummaryService>();
+                builder.Services.AddHostedService<AiEnrichmentBackgroundService>();
+            }
+
             builder.Services.AddControllers();
             builder.Services.AddHttpClient();
 

@@ -22,6 +22,15 @@ namespace TikTokArchive.Entities
         public DateTime? TranscriptLastAttempt { get; set; }
         public string? TranscriptErrorMessage { get; set; }
 
+        // AI enrichment. After the transcript is ready, the enrichment worker makes a single
+        // local-LLM call that fills in Summary and the video's AI-sourced tags (VideoTags with
+        // Source = Ai). One status covers both outputs since they come from the same call.
+        public AiSummaryStatus AiSummaryStatus { get; set; }
+        public string? Summary { get; set; }
+        public int AiSummaryRetryCount { get; set; }
+        public DateTime? AiSummaryLastAttempt { get; set; }
+        public string? AiSummaryErrorMessage { get; set; }
+
         public virtual Creator Creator { get; set; }
         public virtual IEnumerable<VideoTag> Tags { get; set; }
     }

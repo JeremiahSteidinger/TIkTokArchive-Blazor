@@ -57,6 +57,17 @@ namespace TikTokArchive.Entities
             modelBuilder.Entity<Video>()
                 .HasIndex(v => new { v.TranscriptStatus, v.TranscriptLastAttempt });
 
+            // Summaries are short (3–5 sentences) but LONGTEXT matches the Transcript precedent
+            // and costs nothing.
+            modelBuilder.Entity<Video>()
+                .Property(v => v.Summary)
+                .HasColumnType("LONGTEXT");
+
+            // Covering index for the AI-enrichment worker's claim query
+            // (WHERE AiSummaryStatus IN (Pending, Failed) ORDER BY ...).
+            modelBuilder.Entity<Video>()
+                .HasIndex(v => new { v.AiSummaryStatus, v.AiSummaryLastAttempt });
+
             // SearchIndexOperation - created timestamp default
             modelBuilder.Entity<SearchIndexOperation>()
                 .Property(s => s.CreatedAt)

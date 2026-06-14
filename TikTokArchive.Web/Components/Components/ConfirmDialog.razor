@@ -1,0 +1,29 @@
+@* Generic confirmation modal for destructive actions. Driven by the parent's state. *@
+<div class="fixed inset-0 z-[1050] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" @onclick="OnCancelRequested"></div>
+    <div class="relative z-10 flex w-full max-w-md flex-col rounded-xl border border-line bg-surface shadow-2xl">
+        <div class="flex items-center gap-2 border-b border-line px-5 py-3">
+            <Icon Name="warning" Class="size-5 shrink-0 text-amber-500" />
+            <h2 class="flex-1 truncate text-base font-semibold text-ink">@Title</h2>
+        </div>
+        <div class="px-5 py-4 text-sm leading-relaxed text-muted">
+            @Message
+        </div>
+        <div class="flex justify-end gap-2 border-t border-line px-5 py-3">
+            <button class="btn btn-ghost" @onclick="OnCancelRequested">@CancelText</button>
+            <button class="btn btn-danger" @onclick="OnConfirmRequested">@ConfirmText</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Confirm";
+    [Parameter] public string Message { get; set; } = string.Empty;
+    [Parameter] public string ConfirmText { get; set; } = "Confirm";
+    [Parameter] public string CancelText { get; set; } = "Cancel";
+    [Parameter] public EventCallback OnConfirm { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private Task OnConfirmRequested() => OnConfirm.InvokeAsync();
+    private Task OnCancelRequested() => OnCancel.InvokeAsync();
+}

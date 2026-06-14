@@ -5,6 +5,8 @@
 @inject TikTokArchiveDbContext DbContext
 @inject ReindexCoordinator ReindexCoordinator
 @inject ITranscriptionService TranscriptionSvc
+@inject IAiEnrichmentService AiEnrichmentSvc
+@inject ISearchService SearchService
 @inject ToastService Toast
 @implements IDisposable
 
@@ -16,6 +18,7 @@
     <button class="@TabClass(0)" @onclick="@(() => activeTab = 0)">Search Index</button>
     <button class="@TabClass(1)" @onclick="@(() => activeTab = 1)">Local Import</button>
     <button class="@TabClass(2)" @onclick="@(() => activeTab = 2)">Transcription</button>
+    <button class="@TabClass(3)" @onclick="@(() => activeTab = 3)">AI Enrichment</button>
 </div>
 
 @if (activeTab == 0)
@@ -127,6 +130,75 @@
                                     @(error.ErrorMessage?.Length > 50
                                         ? error.ErrorMessage.Substring(0, 50) + "..."
                                         : error.ErrorMessage)
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+
+    <!-- Search Indices -->
+    <div class="card mt-4">
+        <div class="mb-4 flex flex-wrap items-center gap-2">
+            <h2 class="flex-1 text-base font-semibold text-ink">Search Indices</h2>
+            <button class="btn btn-ghost" @onclick="LoadIndices">
+                <Icon Name="refresh" Class="size-4" /> Refresh
+            </button>
+        </div>
+
+        <p class="mb-4 text-sm text-muted">
+            OpenSearch indices for this app. The <span class="font-medium text-ink">active</span>
+            index is what search and indexing use now; older versions are safe to delete once the
+            active one is fully populated.
+        </p>
+
+        @if (indices.Count == 0)
+        {
+            <p class="text-sm text-faint">No indices found.</p>
+        }
+        else
+        {
+            <div class="overflow-x-auto rounded-lg border border-line">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-surface-2 text-xs uppercase tracking-wide text-muted">
+                        <tr>
+                            <th class="px-3 py-2 font-medium">Index</th>
+                            <th class="px-3 py-2 font-medium">Health</th>
+                            <th class="px-3 py-2 text-right font-medium">Documents</th>
+                            <th class="px-3 py-2 text-right font-medium">Size</th>
+                            <th class="px-3 py-2 text-right font-medium">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-line">
+                        @foreach (var index in indices)
+                        {
+                            <tr class="hover:bg-surface-2">
+                                <td class="px-3 py-2">
+                                    <span class="font-mono text-ink">@index.Name</span>
+                                    @if (index.IsActive)
+                                    {
+                                        <span class="badge badge-info ml-2">Active</span>
+                                    }
+                                </td>
+                                <td class="px-3 py-2">
+                                    <span class="badge @HealthBadge(index.Health)">@index.Health</span>
+                                </td>
+                                <td class="px-3 py-2 text-right text-ink">@index.DocsCount.ToString("N0")</td>
+                                <td class="whitespace-nowrap px-3 py-2 text-right text-muted">@index.StoreSize</td>
+                                <td class="px-3 py-2 text-right">
+                                    @if (index.IsActive)
+                                    {
+                                        <span class="text-xs text-faint">In use</span>
+                                    }
+                                    else
+                                    {
+                                        <button class="inline-flex items-center gap-1 text-sm text-rose-600 hover:text-rose-500 dark:text-rose-400 dark:hover:text-rose-300"
+                                                @onclick="@(() => RequestDeleteIndex(index))" title="Delete index">
+                                            <Icon Name="trash" Class="size-4" /> Delete
+                                        </button>
+                                    }
                                 </td>
                             </tr>
                         }
@@ -393,11 +465,160 @@ else if (activeTab == 2)
     </div>
 }
 
+else if (activeTab == 3)
+{
+    <!-- AI Enrichment -->
+    <div class="card">
+        <div class="mb-4 flex flex-wrap items-center gap-2">
+            <h2 class="flex-1 text-base font-semibold text-ink">AI Enrichment Queue</h2>
+            <button class="btn btn-ghost" @onclick="LoadAiEnrichmentData">
+                <Icon Name="refresh" Class="size-4" /> Refresh
+            </button>
+        </div>
+
+        <div class="mb-4 flex flex-wrap gap-2">
+            <span class="badge badge-info">Pending: @AiCount(AiSummaryStatus.Pending)</span>
+            <span class="badge badge-success">Completed: @AiCount(AiSummaryStatus.Completed)</span>
+            <span class="badge badge-danger">Failed: @AiCount(AiSummaryStatus.Failed)</span>
+            <span class="badge bg-surface-2 text-muted">Skipped: @AiCount(AiSummaryStatus.Skipped)</span>
+            <span class="badge bg-surface-2 text-muted">Not requested: @AiCount(AiSummaryStatus.NotRequested)</span>
+        </div>
+
+        <div class="mb-5 flex flex-wrap gap-2">
+            <button class="btn btn-primary" @onclick="RetryFailedAiSummaries"
+                    disabled="@(AiCount(AiSummaryStatus.Failed) == 0)">
+                <Icon Name="refresh" Class="size-4" /> Retry failed (@AiCount(AiSummaryStatus.Failed))
+            </button>
+            <button class="btn btn-ghost" @onclick="BackfillAiSummaries"
+                    disabled="@(AiCount(AiSummaryStatus.NotRequested) == 0)">
+                <Icon Name="sparkles" Class="size-4" /> Enrich back-catalog (@AiCount(AiSummaryStatus.NotRequested))
+            </button>
+        </div>
+
+        <div class="mb-3 flex flex-wrap items-center gap-2">
+            <span class="text-xs text-faint">Show:</span>
+            @foreach (var filter in aiFilters)
+            {
+                var active = aiFilter == filter.Key;
+                <button class="@($"chip {(active ? "chip-active" : "chip-inactive")}")"
+                        @onclick="@(() => SetAiFilter(filter.Key))">
+                    @filter.Label
+                </button>
+            }
+        </div>
+
+        @if (aiVideos.Count == 0)
+        {
+            <p class="text-sm text-faint">No videos in this view.</p>
+        }
+        else
+        {
+            <div class="overflow-x-auto rounded-lg border border-line">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-surface-2 text-xs uppercase tracking-wide text-muted">
+                        <tr>
+                            <th class="px-3 py-2 font-medium">Video</th>
+                            <th class="px-3 py-2 font-medium">Status</th>
+                            <th class="px-3 py-2 font-medium">Summary</th>
+                            <th class="px-3 py-2 font-medium">Retries</th>
+                            <th class="px-3 py-2 font-medium">Last Attempt</th>
+                            <th class="px-3 py-2 font-medium">Error</th>
+                            <th class="px-3 py-2 text-right font-medium">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-line">
+                        @foreach (var row in PagedAiRows)
+                        {
+                            <tr class="align-top hover:bg-surface-2">
+                                <td class="px-3 py-2">
+                                    <div class="font-medium text-ink">@(string.IsNullOrWhiteSpace(row.Creator) ? "—" : row.Creator)</div>
+                                    <div class="line-clamp-1 max-w-xs text-xs text-muted">@row.Description</div>
+                                    <div class="text-[11px] text-faint">@row.VideoId</div>
+                                </td>
+                                <td class="px-3 py-2">
+                                    @{
+                                        var badge = AiBadge(row.Status);
+                                    }
+                                    <span class="badge @badge.Class">@badge.Label</span>
+                                </td>
+                                <td class="px-3 py-2">
+                                    @if (!string.IsNullOrWhiteSpace(row.Summary))
+                                    {
+                                        <span class="line-clamp-2 max-w-xs text-xs text-muted">@row.Summary</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-faint">—</span>
+                                    }
+                                </td>
+                                <td class="px-3 py-2 text-ink">@row.RetryCount</td>
+                                <td class="whitespace-nowrap px-3 py-2 text-muted">@(row.LastAttempt?.ToLocalTime().ToString("g") ?? "—")</td>
+                                <td class="px-3 py-2">
+                                    @if (!string.IsNullOrEmpty(row.Error))
+                                    {
+                                        <button class="inline-flex cursor-pointer items-center gap-1 text-sm text-rose-600 hover:text-rose-500 dark:text-rose-400 dark:hover:text-rose-300"
+                                                @onclick="@(() => ShowAiError(row.VideoId, row.Error!))">
+                                            <Icon Name="error" Class="size-4" /> View
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-faint">—</span>
+                                    }
+                                </td>
+                                <td class="px-3 py-2 text-right">
+                                    <div class="flex items-center justify-end gap-3">
+                                        @if (row.Status == AiSummaryStatus.Completed)
+                                        {
+                                            <button class="inline-flex items-center gap-1 text-sm text-rose-600 hover:text-rose-500 dark:text-rose-400 dark:hover:text-rose-300"
+                                                    @onclick="@(() => DeleteAiSummary(row.VideoId))" title="Delete summary and AI tags">
+                                                <Icon Name="trash" Class="size-4" /> Delete
+                                            </button>
+                                        }
+                                        <button class="inline-flex items-center gap-1 text-sm text-sky-600 hover:text-sky-500 dark:text-sky-400 dark:hover:text-sky-300"
+                                                @onclick="@(() => QueueAiSummary(row.VideoId))"
+                                                title="@(row.Status == AiSummaryStatus.Completed ? "Re-enrich" : "Queue enrichment")">
+                                            <Icon Name="refresh" Class="size-4" />
+                                            @(row.Status == AiSummaryStatus.Completed ? "Re-queue" : "Queue")
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (AiTotalPages > 1)
+            {
+                <div class="mt-3 flex items-center justify-end gap-2 text-sm text-muted">
+                    <button class="icon-btn size-8" disabled="@(aiPage == 1)" @onclick="@(() => aiPage--)" title="Previous page">
+                        <Icon Name="chevron-left" Class="size-4" />
+                    </button>
+                    <span>Page @aiPage of @AiTotalPages</span>
+                    <button class="icon-btn size-8" disabled="@(aiPage == AiTotalPages)" @onclick="@(() => aiPage++)" title="Next page">
+                        <Icon Name="chevron-right" Class="size-4" />
+                    </button>
+                </div>
+            }
+        }
+    </div>
+}
+
 @if (showErrorDialog)
 {
     <ImportErrorDialog Title="@errorDialogTitle"
                        ErrorMessage="@errorDialogMessage"
                        OnClose="@(() => showErrorDialog = false)" />
+}
+
+@if (indexPendingDelete != null)
+{
+    <ConfirmDialog Title="Delete index"
+                   Message="@($"Permanently delete the index '{indexPendingDelete.Name}' and its {indexPendingDelete.DocsCount:N0} document(s)? This cannot be undone.")"
+                   ConfirmText="Delete"
+                   OnConfirm="ConfirmDeleteIndex"
+                   OnCancel="@(() => indexPendingDelete = null)" />
 }
 
 @code {
@@ -413,6 +634,10 @@ else if (activeTab == 2)
     private int pendingCount = 0;
     private int retryingCount = 0;
     private List<ErrorItem> recentErrors = new();
+
+    // Search indices (management table)
+    private List<SearchIndexInfo> indices = new();
+    private SearchIndexInfo? indexPendingDelete;
 
     // Local Import
     private List<LocalImportLog> localImportLogs = new();
@@ -438,6 +663,22 @@ else if (activeTab == 2)
     private int transcriptPage = 1;
     private const int transcriptPageSize = 25;
 
+    // AI Enrichment
+    private static readonly (string Key, string Label)[] aiFilters =
+    {
+        ("queue", "Queue"),                 // active queue: Pending + Failed
+        ("pending", "Pending"),
+        ("failed", "Failed"),
+        ("completed", "Completed"),
+        ("skipped", "Skipped"),
+        ("notrequested", "Not requested"),
+    };
+    private Dictionary<AiSummaryStatus, int> aiCounts = new();
+    private string aiFilter = "queue";
+    private List<AiRow> aiVideos = new();
+    private int aiPage = 1;
+    private const int aiPageSize = 25;
+
     // Error dialog state (replaces MudBlazor's IDialogService)
     private bool showErrorDialog = false;
     private string errorDialogTitle = string.Empty;
@@ -458,6 +699,24 @@ else if (activeTab == 2)
         TranscriptStatus.Failed => ("badge-danger", "Failed"),
         TranscriptStatus.Skipped => ("bg-surface-2 text-muted", "Skipped"),
         TranscriptStatus.NotRequested => ("bg-surface-2 text-muted", "Not requested"),
+        _ => ("bg-surface-2 text-muted", status.ToString())
+    };
+
+    private int AiCount(AiSummaryStatus status) =>
+        aiCounts.TryGetValue(status, out var c) ? c : 0;
+
+    private int AiTotalPages => (int)Math.Ceiling(aiVideos.Count / (double)aiPageSize);
+
+    private IEnumerable<AiRow> PagedAiRows =>
+        aiVideos.Skip((aiPage - 1) * aiPageSize).Take(aiPageSize);
+
+    private static (string Class, string Label) AiBadge(AiSummaryStatus status) => status switch
+    {
+        AiSummaryStatus.Pending => ("badge-info", "Pending"),
+        AiSummaryStatus.Completed => ("badge-success", "Completed"),
+        AiSummaryStatus.Failed => ("badge-danger", "Failed"),
+        AiSummaryStatus.Skipped => ("bg-surface-2 text-muted", "Skipped"),
+        AiSummaryStatus.NotRequested => ("bg-surface-2 text-muted", "Not requested"),
         _ => ("bg-surface-2 text-muted", status.ToString())
     };
 
@@ -484,8 +743,10 @@ else if (activeTab == 2)
 
         await LoadConfiguration();
         await LoadQueueStatus();
+        await LoadIndices();
         await LoadLocalImportLog();
         await LoadTranscriptionData();
+        await LoadAiEnrichmentData();
     }
 
     private async Task LoadConfiguration()
@@ -609,6 +870,46 @@ else if (activeTab == 2)
             Toast.Show($"Error loading queue status: {ex.Message}", ToastSeverity.Error);
         }
     }
+
+    private async Task LoadIndices()
+    {
+        try
+        {
+            indices = await SearchService.GetIndicesAsync();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error loading indices: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private void RequestDeleteIndex(SearchIndexInfo index) => indexPendingDelete = index;
+
+    private async Task ConfirmDeleteIndex()
+    {
+        if (indexPendingDelete is null) return;
+
+        var name = indexPendingDelete.Name;
+        indexPendingDelete = null;
+        try
+        {
+            await SearchService.DeleteIndexAsync(name);
+            Toast.Show($"Deleted index {name}", ToastSeverity.Success);
+            await LoadIndices();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error deleting index {name}: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private static string HealthBadge(string health) => health switch
+    {
+        "green" => "badge-success",
+        "yellow" => "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
+        "red" => "badge-danger",
+        _ => "bg-surface-2 text-muted"
+    };
 
     private async Task LoadLocalImportLog()
     {
@@ -748,6 +1049,115 @@ else if (activeTab == 2)
         showErrorDialog = true;
     }
 
+    private async Task LoadAiEnrichmentData()
+    {
+        try
+        {
+            aiCounts = await AiEnrichmentSvc.GetStatusCountsAsync();
+
+            var query = aiFilter switch
+            {
+                "pending" => DbContext.Videos.Where(v => v.AiSummaryStatus == AiSummaryStatus.Pending),
+                "failed" => DbContext.Videos.Where(v => v.AiSummaryStatus == AiSummaryStatus.Failed),
+                "completed" => DbContext.Videos.Where(v => v.AiSummaryStatus == AiSummaryStatus.Completed),
+                "skipped" => DbContext.Videos.Where(v => v.AiSummaryStatus == AiSummaryStatus.Skipped),
+                "notrequested" => DbContext.Videos.Where(v => v.AiSummaryStatus == AiSummaryStatus.NotRequested),
+                _ => DbContext.Videos.Where(v => v.AiSummaryStatus == AiSummaryStatus.Pending
+                                              || v.AiSummaryStatus == AiSummaryStatus.Failed),
+            };
+
+            aiVideos = await query
+                .OrderByDescending(v => v.AddedToApp)
+                .Take(200)
+                .Select(v => new AiRow
+                {
+                    VideoId = v.TikTokVideoId,
+                    Creator = v.Creator.DisplayName,
+                    Description = v.Description,
+                    Status = v.AiSummaryStatus,
+                    Summary = v.Summary,
+                    RetryCount = v.AiSummaryRetryCount,
+                    LastAttempt = v.AiSummaryLastAttempt,
+                    Error = v.AiSummaryErrorMessage
+                })
+                .ToListAsync();
+            aiPage = 1;
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error loading AI enrichment queue: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private async Task SetAiFilter(string key)
+    {
+        aiFilter = key;
+        await LoadAiEnrichmentData();
+    }
+
+    private async Task QueueAiSummary(string videoId)
+    {
+        try
+        {
+            await AiEnrichmentSvc.QueueAsync(videoId);
+            Toast.Show("Queued for AI enrichment", ToastSeverity.Success);
+            await LoadAiEnrichmentData();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error queueing enrichment: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private async Task DeleteAiSummary(string videoId)
+    {
+        try
+        {
+            await AiEnrichmentSvc.DeleteSummaryAsync(videoId);
+            Toast.Show("AI summary and tags deleted", ToastSeverity.Success);
+            await LoadAiEnrichmentData();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error deleting summary: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private async Task RetryFailedAiSummaries()
+    {
+        try
+        {
+            var count = await AiEnrichmentSvc.RetryFailedAsync();
+            Toast.Show($"Requeued {count} failed enrichment(s)", ToastSeverity.Success);
+            await LoadAiEnrichmentData();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error retrying enrichments: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private async Task BackfillAiSummaries()
+    {
+        try
+        {
+            var count = await AiEnrichmentSvc.BackfillAsync();
+            Toast.Show($"Queued {count} video(s) for AI enrichment", ToastSeverity.Success);
+            await LoadAiEnrichmentData();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error queueing back-catalog: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private void ShowAiError(string videoId, string error)
+    {
+        errorDialogTitle = $"AI Enrichment Error — {videoId}";
+        errorDialogMessage = error;
+        showErrorDialog = true;
+    }
+
     public void Dispose()
     {
         reindexPollTimer?.Dispose();
@@ -769,6 +1179,18 @@ else if (activeTab == 2)
         public string Description { get; set; } = string.Empty;
         public TranscriptStatus Status { get; set; }
         public double? Confidence { get; set; }
+        public int RetryCount { get; set; }
+        public DateTime? LastAttempt { get; set; }
+        public string? Error { get; set; }
+    }
+
+    private class AiRow
+    {
+        public string VideoId { get; set; } = string.Empty;
+        public string Creator { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public AiSummaryStatus Status { get; set; }
+        public string? Summary { get; set; }
         public int RetryCount { get; set; }
         public DateTime? LastAttempt { get; set; }
         public string? Error { get; set; }

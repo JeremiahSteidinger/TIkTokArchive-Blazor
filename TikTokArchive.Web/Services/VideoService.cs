@@ -10,6 +10,12 @@ public interface IVideoService
     Task<(List<Video> Videos, int TotalCount)> GetVideosAsync(int page = 1, int pageSize = 20, string? tagFilter = null, string? searchQuery = null, List<string>? searchFields = null);
     Task<Video?> GetVideoAsync(string id);
     Task DeleteVideoAsync(string id);
+
+    /// <summary>
+    /// Remove an AI-generated tag from a video. Only AI-sourced associations are removable —
+    /// TikTok tags are left intact (returns false). Re-indexes so the tag drops out of search.
+    /// </summary>
+    Task<bool> RemoveTagFromVideoAsync(string videoId, int tagId, CancellationToken ct = default);
 }
 
 public class VideoService : IVideoService
@@ -128,6 +134,25 @@ public class VideoService : IVideoService
 
         var sanitizedId = id.Replace("\r", string.Empty).Replace("\n", string.Empty);
         logger.LogInformation("Successfully deleted video with ID {VideoId}", sanitizedId);
+    }
+
+    public async Task<bool> RemoveTagFromVideoAsync(string videoId, int tagId, CancellationToken ct = default)
+    {
+        var videoTag = await dbContext.VideoTags
+            .FirstOrDefaultAsync(vt => vt.Video.TikTokVideoId == videoId && vt.TagId == tagId, ct);
+
+        // Only AI-sourced tags are user-removable; a missing row or a TikTok tag is a no-op.
+        if (videoTag == null || videoTag.Source != TagSource.Ai)
+        {
+            return false;
+        }
+
+        dbContext.VideoTags.Remove(videoTag);
+        // Re-index in the same SaveChanges so the tag also drops out of search.
+        await SearchIndexOutbox.EnqueueIndexAsync(dbContext, videoId, ct);
+        await dbContext.SaveChangesAsync(ct);
+        searchSignal.Notify();
+        return true;
     }
 
     private void DeleteMediaFiles(string directory, string videoId)

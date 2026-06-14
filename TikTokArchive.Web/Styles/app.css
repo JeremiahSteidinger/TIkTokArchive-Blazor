@@ -119,6 +119,11 @@
         @apply bg-surface-2 text-muted hover:text-ink;
     }
 
+    /* AI-generated tags — violet, to read distinctly from sky (TikTok) and rose (active filter). */
+    .chip-ai {
+        @apply bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300;
+    }
+
     .badge {
         @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium;
     }
