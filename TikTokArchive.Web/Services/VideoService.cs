@@ -5,11 +5,20 @@ using TikTokArchive.Web.Options;
 
 namespace TikTokArchive.Web.Services;
 
+/// <summary>Lightweight transcript + AI-summary status for one video, for live status polling.</summary>
+public record VideoStatus(string VideoId, TranscriptStatus TranscriptStatus, AiSummaryStatus AiSummaryStatus);
+
 public interface IVideoService
 {
     Task<(List<Video> Videos, int TotalCount)> GetVideosAsync(int page = 1, int pageSize = 20, string? tagFilter = null, string? searchQuery = null, List<string>? searchFields = null);
     Task<Video?> GetVideoAsync(string id);
     Task DeleteVideoAsync(string id);
+
+    /// <summary>
+    /// The current transcript + AI-summary status of the given videos, without loading the full
+    /// entities. Used by the videos page to poll for queued → completed/failed transitions.
+    /// </summary>
+    Task<List<VideoStatus>> GetStatusesAsync(IReadOnlyCollection<string> videoIds, CancellationToken ct = default);
 
     /// <summary>
     /// Remove an AI-generated tag from a video. Only AI-sourced associations are removable —
@@ -20,20 +29,20 @@ public interface IVideoService
 
 public class VideoService : IVideoService
 {
-    private readonly TikTokArchiveDbContext dbContext;
+    private readonly IDbContextFactory<TikTokArchiveDbContext> dbContextFactory;
     private readonly ILogger<VideoService> logger;
     private readonly ISearchService searchService;
     private readonly SearchIndexSignal searchSignal;
     private readonly MediaStorageOptions mediaOptions;
 
     public VideoService(
-        TikTokArchiveDbContext dbContext,
+        IDbContextFactory<TikTokArchiveDbContext> dbContextFactory,
         ILogger<VideoService> logger,
         ISearchService searchService,
         SearchIndexSignal searchSignal,
         IOptions<MediaStorageOptions> mediaOptions)
     {
-        this.dbContext = dbContext;
+        this.dbContextFactory = dbContextFactory;
         this.logger = logger;
         this.searchService = searchService;
         this.searchSignal = searchSignal;
@@ -42,11 +51,13 @@ public class VideoService : IVideoService
 
     public async Task<(List<Video> Videos, int TotalCount)> GetVideosAsync(int page = 1, int pageSize = 20, string? tagFilter = null, string? searchQuery = null, List<string>? searchFields = null)
     {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync();
+
         // If search query provided, use search service
         if (!string.IsNullOrWhiteSpace(searchQuery))
         {
             var searchResult = await searchService.SearchAsync(searchQuery, page, pageSize, searchFields);
-            var matchedVideos = await LoadVideosByIdsAsync(searchResult.VideoIds);
+            var matchedVideos = await LoadVideosByIdsAsync(dbContext, searchResult.VideoIds);
             return (matchedVideos, (int)searchResult.TotalCount);
         }
 
@@ -75,7 +86,22 @@ public class VideoService : IVideoService
         return (videos, totalCount);
     }
 
-    private async Task<List<Video>> LoadVideosByIdsAsync(List<string> videoIds)
+    public async Task<List<VideoStatus>> GetStatusesAsync(IReadOnlyCollection<string> videoIds, CancellationToken ct = default)
+    {
+        if (videoIds.Count == 0)
+        {
+            return new List<VideoStatus>();
+        }
+
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(ct);
+        return await dbContext.Videos
+            .AsNoTracking()
+            .Where(v => videoIds.Contains(v.TikTokVideoId))
+            .Select(v => new VideoStatus(v.TikTokVideoId, v.TranscriptStatus, v.AiSummaryStatus))
+            .ToListAsync(ct);
+    }
+
+    private static async Task<List<Video>> LoadVideosByIdsAsync(TikTokArchiveDbContext dbContext, List<string> videoIds)
     {
         if (videoIds.Count == 0)
         {
@@ -98,6 +124,7 @@ public class VideoService : IVideoService
 
     public async Task<Video?> GetVideoAsync(string id)
     {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Videos
             .Include(v => v.Creator)
             .Include(v => v.Tags)
@@ -106,6 +133,7 @@ public class VideoService : IVideoService
 
     public async Task DeleteVideoAsync(string id)
     {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync();
         var video = await dbContext.Videos
             .Include(v => v.Tags)
             .FirstOrDefaultAsync(v => v.TikTokVideoId == id);
@@ -138,6 +166,7 @@ public class VideoService : IVideoService
 
     public async Task<bool> RemoveTagFromVideoAsync(string videoId, int tagId, CancellationToken ct = default)
     {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(ct);
         var videoTag = await dbContext.VideoTags
             .FirstOrDefaultAsync(vt => vt.Video.TikTokVideoId == videoId && vt.TagId == tagId, ct);
 

@@ -19,6 +19,13 @@ namespace TikTokArchive.Web.Services
         private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(30);
 
+        // A transcript stuck on Failed past this many attempts is treated as "not coming": the
+        // worker then summarizes from the caption alone rather than waiting on the transcript
+        // forever. Small enough that a permanent failure (bad codec, corrupt file) degrades to a
+        // caption-only summary quickly; large enough that a transient STT outage — which retries
+        // under backoff — usually recovers first and still yields a transcript-based summary.
+        private const int TranscriptFailureGiveUpAttempts = 3;
+
         private readonly AiEnrichmentSignal _signal;
         private readonly SearchIndexSignal _searchSignal;
         private readonly IServiceProvider _serviceProvider;
@@ -77,17 +84,21 @@ namespace TikTokArchive.Web.Services
             {
                 var dbContext = scope.ServiceProvider.GetRequiredService<TikTokArchiveDbContext>();
 
-                // Only enrich once the transcript stage is done (Completed or Skipped); videos
-                // still Pending/Failed transcription are simply not claimed yet — they're picked
-                // up on a later poll once transcription finishes. Backoff eligibility depends on
-                // RetryCount, so compute it in memory over a bounded window.
+                // Enrich once the transcript stage has settled: Completed/Skipped (terminal), or
+                // Failed past TranscriptFailureGiveUpAttempts — in which case we stop waiting and
+                // summarize from the caption alone (ProcessVideoAsync feeds the transcript only
+                // when one genuinely exists). Videos still Pending, or Failed within the give-up
+                // window, are left for a later poll so a recovering transcription is still used.
+                // Backoff eligibility depends on RetryCount, so compute it in memory over a window.
                 var now = DateTime.UtcNow;
                 var candidates = await dbContext.Videos
                     .AsNoTracking()
                     .Where(v => (v.AiSummaryStatus == AiSummaryStatus.Pending
                               || v.AiSummaryStatus == AiSummaryStatus.Failed)
                              && (v.TranscriptStatus == TranscriptStatus.Completed
-                              || v.TranscriptStatus == TranscriptStatus.Skipped))
+                              || v.TranscriptStatus == TranscriptStatus.Skipped
+                              || (v.TranscriptStatus == TranscriptStatus.Failed
+                               && v.TranscriptRetryCount >= TranscriptFailureGiveUpAttempts)))
                     .OrderBy(v => v.Id)
                     .Take(200)
                     .Select(v => new { v.Id, v.AiSummaryRetryCount, v.AiSummaryLastAttempt })

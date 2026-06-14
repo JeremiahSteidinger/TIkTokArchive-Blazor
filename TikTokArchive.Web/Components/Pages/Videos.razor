@@ -342,6 +342,7 @@ else
     private IReadOnlyList<IngestJob> ingestJobs = Array.Empty<IngestJob>();
     private readonly HashSet<Guid> notifiedJobs = new();
     private System.Timers.Timer? jobPollTimer;
+    private System.Timers.Timer? statusPollTimer;
 
     private bool showTranscriptDialog = false;
     private string transcriptDialogTitle = string.Empty;
@@ -381,9 +382,14 @@ else
         StateHasChanged();
     }
 
-    private async Task LoadVideos()
+    // showLoading is suppressed for background status refreshes so the grid isn't briefly
+    // replaced by the loading spinner while a poll re-fetches the page.
+    private async Task LoadVideos(bool showLoading = true)
     {
-        isLoading = true;
+        if (showLoading)
+        {
+            isLoading = true;
+        }
         loadedVideos.Clear(); // Clear loaded videos when navigating pages
         try
         {
@@ -402,8 +408,15 @@ else
         }
         finally
         {
-            isLoading = false;
+            if (showLoading)
+            {
+                isLoading = false;
+            }
         }
+
+        // Whenever the visible set changes, (re)start polling if any of these videos are still
+        // being transcribed or enriched, so their card icons update as the workers finish.
+        StartStatusPolling();
     }
 
     private void HandleSearchKeyUp(KeyboardEventArgs e)
@@ -527,6 +540,69 @@ else
         StateHasChanged();
     }
 
+    // A video whose transcript or AI summary is still queued will change state when the
+    // background worker finishes — those are the cards whose icons we want to keep live.
+    private bool HasPendingWork() =>
+        videos.Any(v => v.TranscriptStatus == TranscriptStatus.Pending
+                     || v.AiSummaryStatus == AiSummaryStatus.Pending);
+
+    private void StartStatusPolling()
+    {
+        if (statusPollTimer != null || !HasPendingWork()) return;
+
+        statusPollTimer = new System.Timers.Timer(3000);
+        statusPollTimer.Elapsed += async (sender, args) => await InvokeAsync(RefreshStatusesAsync);
+        statusPollTimer.Start();
+    }
+
+    private void StopStatusPolling()
+    {
+        statusPollTimer?.Stop();
+        statusPollTimer?.Dispose();
+        statusPollTimer = null;
+    }
+
+    private async Task RefreshStatusesAsync()
+    {
+        var ids = videos.Select(v => v.TikTokVideoId).ToList();
+        if (ids.Count == 0)
+        {
+            StopStatusPolling();
+            return;
+        }
+
+        List<VideoStatus> statuses;
+        try
+        {
+            statuses = await VideoService.GetStatusesAsync(ids);
+        }
+        catch
+        {
+            return; // transient DB hiccup — try again on the next tick
+        }
+
+        // Did any visible card's transcript / summary status change since we last loaded?
+        var statusById = statuses.ToDictionary(s => s.VideoId);
+        var changed = videos.Any(v =>
+            statusById.TryGetValue(v.TikTokVideoId, out var s)
+            && (s.TranscriptStatus != v.TranscriptStatus || s.AiSummaryStatus != v.AiSummaryStatus));
+
+        if (changed)
+        {
+            // Reload (without the loading spinner) so the new summary text, transcript, and AI
+            // tags arrive with the status — not just the icon. Ordering is stable (newest first),
+            // so cards don't jump.
+            await LoadVideos(showLoading: false);
+            StateHasChanged();
+        }
+
+        // Nothing left in flight on this page — stop polling until something is queued again.
+        if (!HasPendingWork())
+        {
+            StopStatusPolling();
+        }
+    }
+
     private static string JobStatusText(IngestJobStatus status) => status switch
     {
         IngestJobStatus.Queued => "Queued",
@@ -540,6 +616,7 @@ else
     {
         searchDebounceTimer?.Dispose();
         jobPollTimer?.Dispose();
+        statusPollTimer?.Dispose();
     }
 
     private async Task OnPageChanged(int page)
@@ -620,6 +697,7 @@ else
                 // Reflect the new state immediately; the worker processes it in the background.
                 video.TranscriptStatus = TranscriptStatus.Pending;
                 Toast.Show("Queued for transcription", ToastSeverity.Success);
+                StartStatusPolling(); // keep the card's icon live until the worker finishes
                 StateHasChanged();
             }
         }
@@ -639,6 +717,7 @@ else
                 // ready (it may already be), in the background.
                 video.AiSummaryStatus = AiSummaryStatus.Pending;
                 Toast.Show("Queued for AI enrichment", ToastSeverity.Success);
+                StartStatusPolling(); // keep the card's icon live until the worker finishes
                 StateHasChanged();
             }
         }
