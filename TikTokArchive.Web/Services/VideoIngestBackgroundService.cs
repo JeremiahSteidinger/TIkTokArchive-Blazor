@@ -18,6 +18,7 @@ namespace TikTokArchive.Web.Services
         private readonly SearchIndexSignal _searchSignal;
         private readonly TranscriptionSignal _transcriptionSignal;
         private readonly AiEnrichmentSignal _aiEnrichmentSignal;
+        private readonly BackgroundTaskMonitor _monitor;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly MediaStorageOptions _mediaOptions;
         private readonly ILogger<VideoIngestBackgroundService> _logger;
@@ -28,6 +29,7 @@ namespace TikTokArchive.Web.Services
             SearchIndexSignal searchSignal,
             TranscriptionSignal transcriptionSignal,
             AiEnrichmentSignal aiEnrichmentSignal,
+            BackgroundTaskMonitor monitor,
             IHttpClientFactory httpClientFactory,
             IOptions<MediaStorageOptions> mediaOptions,
             ILogger<VideoIngestBackgroundService> logger)
@@ -37,6 +39,7 @@ namespace TikTokArchive.Web.Services
             _searchSignal = searchSignal;
             _transcriptionSignal = transcriptionSignal;
             _aiEnrichmentSignal = aiEnrichmentSignal;
+            _monitor = monitor;
             _httpClientFactory = httpClientFactory;
             _mediaOptions = mediaOptions.Value;
             _logger = logger;
@@ -89,6 +92,8 @@ namespace TikTokArchive.Web.Services
             var dbContext = scope.ServiceProvider.GetRequiredService<TikTokArchiveDbContext>();
             var ytDlp = scope.ServiceProvider.GetRequiredService<IYtDlpService>();
 
+            _monitor.BeginItem("ingest", job.Url, null, "Fetching metadata");
+
             try
             {
                 job.Status = IngestJobStatus.FetchingMetadata;
@@ -105,12 +110,14 @@ namespace TikTokArchive.Web.Services
                 Directory.CreateDirectory(_mediaOptions.ThumbnailsPath);
 
                 job.Status = IngestJobStatus.Downloading;
+                _monitor.UpdateStep("ingest", "Downloading");
                 var outputTemplate = Path.Combine(_mediaOptions.VideosPath, "%(id)s.%(ext)s");
                 await ytDlp.DownloadVideoAsync(job.Url, outputTemplate, cancellationToken);
 
                 await DownloadThumbnailAsync(metadata, cancellationToken);
 
                 job.Status = IngestJobStatus.Saving;
+                _monitor.UpdateStep("ingest", "Saving");
                 await SaveVideoAsync(dbContext, metadata, cancellationToken);
                 _searchSignal.Notify();
                 _transcriptionSignal.Notify();
@@ -129,6 +136,10 @@ namespace TikTokArchive.Web.Services
                 _logger.LogError(ex, "Ingest failed for URL {Url}", job.Url);
                 CleanUpMediaFiles(job.VideoId);
                 job.MarkFailed(ex.GetFullMessage());
+            }
+            finally
+            {
+                _monitor.CompleteItem("ingest", job.Status == IngestJobStatus.Failed ? job.Error : null);
             }
         }
 

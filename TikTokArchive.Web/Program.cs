@@ -60,6 +60,10 @@ namespace TikTokArchive.Web
 
             builder.Services.AddScoped<IVideoService, VideoService>();
 
+            // Live, in-memory view of what each background worker is doing right now, surfaced
+            // on the /monitor page. Workers report their activity to this shared instance.
+            builder.Services.AddSingleton<BackgroundTaskMonitor>();
+
             // Search: OpenSearch client + service, and the outbox worker that applies
             // queued SearchIndexOperations rows to the index.
             builder.Services.AddSingleton<IOpenSearchClient>(sp =>
@@ -154,6 +158,19 @@ namespace TikTokArchive.Web
             builder.Services.AddScoped<ToastService>();
 
             var app = builder.Build();
+
+            // Declare the background workers so the monitor page lists them in pipeline order from
+            // the start — including ones gated off by a feature flag, which show as Disabled. The
+            // enabled flags must match the AddHostedService conditions above.
+            var monitor = app.Services.GetRequiredService<BackgroundTaskMonitor>();
+            monitor.Register("ingest", "Video Download", "Downloads TikTok videos via yt-dlp.", enabled: true);
+            monitor.Register("local-import", "Local Import", "Imports video files dropped into the watch folder.", enabled: true);
+            monitor.Register("transcription", "Transcription", "Transcribes video audio to text via Whisper.",
+                enabled: builder.Configuration.GetValue<bool>("SpeechToText:Enabled"));
+            monitor.Register("ai-enrichment", "AI Enrichment", "Generates summaries and tags via a local LLM.",
+                enabled: builder.Configuration.GetValue<bool>("AiEnrichment:Enabled"));
+            monitor.Register("search-index", "Search Indexer", "Applies queued OpenSearch index operations.", enabled: true);
+            monitor.Register("search-sync", "Search Sync", "Reconciles the database with the search index.", enabled: true);
 
             using (var scope = app.Services.CreateScope())
             {

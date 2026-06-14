@@ -19,15 +19,18 @@ namespace TikTokArchive.Web.Services
 
         private readonly SearchIndexSignal _signal;
         private readonly IServiceProvider _serviceProvider;
+        private readonly BackgroundTaskMonitor _monitor;
         private readonly ILogger<SearchIndexBackgroundService> _logger;
 
         public SearchIndexBackgroundService(
             SearchIndexSignal signal,
             IServiceProvider serviceProvider,
+            BackgroundTaskMonitor monitor,
             ILogger<SearchIndexBackgroundService> logger)
         {
             _signal = signal;
             _serviceProvider = serviceProvider;
+            _monitor = monitor;
             _logger = logger;
         }
 
@@ -108,6 +111,10 @@ namespace TikTokArchive.Web.Services
             SearchIndexOperation operation,
             CancellationToken cancellationToken)
         {
+            _monitor.BeginItem("search-index", operation.VideoId, null,
+                operation.OperationType == SearchIndexOperationType.Index ? "Indexing" : "Deleting");
+            string? error = null;
+
             try
             {
                 if (operation.OperationType == SearchIndexOperationType.Index)
@@ -151,6 +158,7 @@ namespace TikTokArchive.Web.Services
             }
             catch (Exception ex)
             {
+                error = ex.GetFullMessage();
                 _logger.LogError(ex, "Error processing {OperationType} for video {VideoId} (attempt {Attempt})",
                     operation.OperationType, operation.VideoId, operation.RetryCount + 1);
 
@@ -162,6 +170,10 @@ namespace TikTokArchive.Web.Services
                         .SetProperty(o => o.RetryCount, operation.RetryCount + 1)
                         .SetProperty(o => o.LastAttempt, DateTime.UtcNow)
                         .SetProperty(o => o.ErrorMessage, ex.GetFullMessage()), cancellationToken);
+            }
+            finally
+            {
+                _monitor.CompleteItem("search-index", error);
             }
         }
     }

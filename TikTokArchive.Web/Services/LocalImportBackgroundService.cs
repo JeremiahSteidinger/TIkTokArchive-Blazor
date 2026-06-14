@@ -19,6 +19,7 @@ namespace TikTokArchive.Web.Services
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly SearchIndexSignal _searchSignal;
         private readonly TranscriptionSignal _transcriptionSignal;
+        private readonly BackgroundTaskMonitor _monitor;
         private readonly ILogger<LocalImportBackgroundService> _logger;
         private readonly string _importPath;
         private readonly string _videosPath;
@@ -28,6 +29,7 @@ namespace TikTokArchive.Web.Services
             IServiceScopeFactory scopeFactory,
             SearchIndexSignal searchSignal,
             TranscriptionSignal transcriptionSignal,
+            BackgroundTaskMonitor monitor,
             IOptions<MediaStorageOptions> mediaOptions,
             ILogger<LocalImportBackgroundService> logger,
             IConfiguration configuration)
@@ -35,6 +37,7 @@ namespace TikTokArchive.Web.Services
             _scopeFactory = scopeFactory;
             _searchSignal = searchSignal;
             _transcriptionSignal = transcriptionSignal;
+            _monitor = monitor;
             _logger = logger;
             _importPath = configuration["LocalImport:ImportPath"] ?? "/dropfolder";
             _videosPath = mediaOptions.Value.VideosPath;
@@ -89,6 +92,9 @@ namespace TikTokArchive.Web.Services
             // Use a short unique ID with "local-" prefix so it's distinguishable from TikTok IDs
             var videoId = $"local-{Guid.NewGuid():N}"[..22];
             var destPath = Path.Combine(_videosPath, $"{videoId}.{ext}");
+
+            _monitor.BeginItem("local-import", fileName, null, "Importing");
+            string? error = null;
 
             try
             {
@@ -150,6 +156,7 @@ namespace TikTokArchive.Web.Services
             }
             catch (Exception ex)
             {
+                error = ex.Message;
                 _logger.LogError(ex, "Failed to import {FileName}", fileName);
 
                 // Write failure log — use a fresh scope so a partial DB failure above doesn't block us
@@ -178,6 +185,10 @@ namespace TikTokArchive.Web.Services
                     try { File.Move(destPath, filePath); }
                     catch { /* best-effort rollback */ }
                 }
+            }
+            finally
+            {
+                _monitor.CompleteItem("local-import", error);
             }
         }
 
