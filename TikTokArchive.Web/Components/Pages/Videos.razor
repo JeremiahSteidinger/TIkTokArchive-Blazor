@@ -1,6 +1,7 @@
 @page "/videos"
 @inject TikTokArchive.Web.Services.IVideoService VideoService
 @inject TikTokArchive.Web.Services.VideoIngestQueue IngestQueue
+@inject TikTokArchive.Web.Services.ITranscriptionService TranscriptionSvc
 @inject IJSRuntime JSRuntime
 @inject ToastService Toast
 @using TikTokArchive.Entities
@@ -161,9 +162,44 @@ else
                             }
                         </div>
                         <div class="mt-auto flex items-center justify-between border-t border-line px-3 py-2">
-                            <a class="icon-btn" href="@GetDownloadUrl(video.TikTokVideoId)" target="_blank" title="Download video">
-                                <Icon Name="download" />
-                            </a>
+                            <div class="flex items-center gap-1">
+                                <a class="icon-btn" href="@GetDownloadUrl(video.TikTokVideoId)" target="_blank" title="Download video">
+                                    <Icon Name="download" />
+                                </a>
+                                @switch (video.TranscriptStatus)
+                                {
+                                    case TranscriptStatus.Completed:
+                                        <button class="@($"icon-btn {(IsLowConfidence(video) ? "text-amber-500 hover:bg-amber-500/10" : "text-emerald-500 hover:bg-emerald-500/10")}")"
+                                                @onclick="@(() => ShowTranscript(video))"
+                                                title="@(IsLowConfidence(video) ? "Transcript (low confidence) — click to view" : "View transcript")">
+                                            <Icon Name="document-text" />
+                                        </button>
+                                        break;
+                                    case TranscriptStatus.Pending:
+                                        <span class="icon-btn cursor-default text-amber-500" title="Queued for transcription">
+                                            <Icon Name="clock" />
+                                        </span>
+                                        break;
+                                    case TranscriptStatus.Failed:
+                                        <button class="icon-btn text-rose-500 hover:bg-rose-500/10"
+                                                @onclick="@(() => QueueTranscription(video))" title="Transcription failed — click to retry">
+                                            <Icon Name="refresh" />
+                                        </button>
+                                        break;
+                                    case TranscriptStatus.Skipped:
+                                        <button class="icon-btn text-muted hover:bg-surface-2"
+                                                @onclick="@(() => QueueTranscription(video))" title="No audio / skipped — click to transcribe again">
+                                            <Icon Name="speaker-x" />
+                                        </button>
+                                        break;
+                                    default: // NotRequested
+                                        <button class="icon-btn hover:bg-sky-500/10 hover:text-sky-500"
+                                                @onclick="@(() => QueueTranscription(video))" title="Queue transcription">
+                                            <Icon Name="microphone" />
+                                        </button>
+                                        break;
+                                }
+                            </div>
                             <button class="icon-btn hover:bg-rose-500/10 hover:text-rose-500"
                                     @onclick="@(() => DeleteVideo(video.TikTokVideoId))" title="Delete video">
                                 <Icon Name="trash" />
@@ -210,13 +246,24 @@ else
     </div>
 }
 
+@if (showTranscriptDialog && transcriptDialogVideo != null)
+{
+    <TranscriptDialog Title="@transcriptDialogTitle"
+                      Transcript="@transcriptDialogVideo.Transcript"
+                      Confidence="@transcriptDialogVideo.TranscriptConfidence"
+                      IsLowConfidence="@IsLowConfidence(transcriptDialogVideo)"
+                      OnClose="@(() => showTranscriptDialog = false)"
+                      OnDelete="@(() => DeleteTranscript(transcriptDialogVideo))" />
+}
+
 @code {
     private static readonly (string Key, string Label)[] searchFieldOptions =
     {
         ("all", "All"),
         ("description", "Description"),
         ("creator", "Creator"),
-        ("tags", "Tags")
+        ("tags", "Tags"),
+        ("transcript", "Transcript")
     };
 
     private List<Video> videos = new();
@@ -236,6 +283,10 @@ else
     private IReadOnlyList<IngestJob> ingestJobs = Array.Empty<IngestJob>();
     private readonly HashSet<Guid> notifiedJobs = new();
     private System.Timers.Timer? jobPollTimer;
+
+    private bool showTranscriptDialog = false;
+    private string transcriptDialogTitle = string.Empty;
+    private Video? transcriptDialogVideo;
 
     private IEnumerable<int> PageNumbers()
     {
@@ -481,5 +532,62 @@ else
     private string GetDownloadUrl(string videoId)
     {
         return $"/api/video/{videoId}/download";
+    }
+
+    private async Task QueueTranscription(Video video)
+    {
+        try
+        {
+            if (await TranscriptionSvc.QueueAsync(video.TikTokVideoId))
+            {
+                // Reflect the new state immediately; the worker processes it in the background.
+                video.TranscriptStatus = TranscriptStatus.Pending;
+                Toast.Show("Queued for transcription", ToastSeverity.Success);
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error queueing transcription: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private void ShowTranscript(Video video)
+    {
+        transcriptDialogTitle = string.IsNullOrWhiteSpace(video.Creator?.DisplayName)
+            ? "Transcript"
+            : $"Transcript — {video.Creator!.DisplayName}";
+        transcriptDialogVideo = video;
+        showTranscriptDialog = true;
+    }
+
+    private bool IsLowConfidence(Video video) =>
+        video.TranscriptConfidence is double c && c < TranscriptionSvc.LowConfidenceThreshold;
+
+    private async Task DeleteTranscript(Video video)
+    {
+        if (!await JSRuntime.InvokeAsync<bool>("confirm",
+            "Delete this transcript? It will also be removed from search."))
+        {
+            return;
+        }
+
+        try
+        {
+            if (await TranscriptionSvc.DeleteTranscriptAsync(video.TikTokVideoId))
+            {
+                // Reflect the cleared state in the list immediately.
+                video.Transcript = null;
+                video.TranscriptConfidence = null;
+                video.TranscriptStatus = TranscriptStatus.Skipped;
+                showTranscriptDialog = false;
+                Toast.Show("Transcript deleted", ToastSeverity.Success);
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error deleting transcript: {ex.Message}", ToastSeverity.Error);
+        }
     }
 }

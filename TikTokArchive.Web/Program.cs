@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using OpenSearch.Client;
 using TikTokArchive.Entities;
 using TikTokArchive.Web.Components;
@@ -82,6 +83,30 @@ namespace TikTokArchive.Web
 
             // Local import: watches a drop folder and imports video files found there.
             builder.Services.AddHostedService<LocalImportBackgroundService>();
+
+            // Speech-to-text: transcribes video audio off the ingest path and re-indexes
+            // through the existing search outbox. The signal is always registered so the
+            // ingest services' Notify() is a harmless no-op when the feature is disabled;
+            // only the client + worker are gated behind the feature flag.
+            builder.Services.Configure<SpeechToTextOptions>(
+                builder.Configuration.GetSection(SpeechToTextOptions.SectionName));
+            builder.Services.AddSingleton<TranscriptionSignal>();
+            // Always registered so the management UI works even when the worker is disabled
+            // (queued videos simply wait until it's enabled).
+            builder.Services.AddScoped<ITranscriptionService, TranscriptionService>();
+
+            if (builder.Configuration.GetValue<bool>("SpeechToText:Enabled"))
+            {
+                builder.Services.AddHttpClient(WhisperAsrSpeechToTextService.HttpClientName, (sp, client) =>
+                {
+                    var options = sp.GetRequiredService<IOptions<SpeechToTextOptions>>().Value;
+                    client.BaseAddress = new Uri(options.Url.TrimEnd('/') + "/");
+                    // Transcription takes minutes, not the default 100 seconds.
+                    client.Timeout = TimeSpan.FromMinutes(options.TimeoutMinutes);
+                });
+                builder.Services.AddSingleton<ISpeechToTextService, WhisperAsrSpeechToTextService>();
+                builder.Services.AddHostedService<TranscriptionBackgroundService>();
+            }
 
             builder.Services.AddControllers();
             builder.Services.AddHttpClient();

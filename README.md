@@ -1,8 +1,8 @@
 # TikTok Archive (Blazor)
 
-A self-hosted TikTok video archive. Paste a TikTok URL and the app downloads the video and thumbnail with `yt-dlp`, extracts metadata and hashtags, and stores everything in MySQL with media on disk. Videos are browsable, streamable, taggable, and searchable through a Blazor Server UI styled with Tailwind CSS, with full-text search backed by OpenSearch. Runs in Docker; not internet-facing, so there is no authentication.
+A self-hosted TikTok video archive. Paste a TikTok URL and the app downloads the video and thumbnail with `yt-dlp`, extracts metadata and hashtags, and stores everything in MySQL with media on disk. Videos are browsable, streamable, taggable, and searchable through a Blazor Server UI styled with Tailwind CSS, with full-text search backed by OpenSearch — including the **spoken content** of each video, transcribed by a self-hosted Whisper service. Runs in Docker; not internet-facing, so there is no authentication.
 
-**Stack:** .NET 10 / Blazor Server · Tailwind CSS v4 · EF Core (Pomelo MySQL) · OpenSearch 2.x · yt-dlp · Docker Compose
+**Stack:** .NET 10 / Blazor Server · Tailwind CSS v4 · EF Core (Pomelo MySQL) · OpenSearch 2.x · yt-dlp · Whisper (speech-to-text) · Docker Compose
 
 ---
 
@@ -18,9 +18,21 @@ MySQL is the source of truth; the OpenSearch index is a disposable projection th
 
 ### Search service
 
-`OpenSearchService` is a thin search client: it maps `Video` → `VideoDocument` (one mapper for single and bulk indexing), executes queries, and returns matched video IDs — entity hydration happens in `VideoService` against the database. Queries use `match` against ngram-analyzed fields (description, creator name/username, tags) with relevance-first sorting, date as tiebreak.
+`OpenSearchService` is a thin search client: it maps `Video` → `VideoDocument` (one mapper for single and bulk indexing), executes queries, and returns matched video IDs — entity hydration happens in `VideoService` against the database. Queries use `match` against ngram-analyzed fields (description, creator name/username, tags, transcript) with relevance-first sorting, date as tiebreak.
 
-The index (`tiktok_videos_v2`) is created lazily with the correct mapping before any operation, so a slow-starting OpenSearch can never cause an auto-created index with wrong dynamic mappings. The Admin page offers a bulk reindex, coordinated by `ReindexCoordinator` (one job at a time, observable progress).
+The index (`tiktok_videos_v3`) is created lazily with the correct mapping before any operation, so a slow-starting OpenSearch can never cause an auto-created index with wrong dynamic mappings. The Admin page offers a bulk reindex, coordinated by `ReindexCoordinator` (one job at a time, observable progress).
+
+### Speech-to-text transcription
+
+Video audio is transcribed to text and indexed so users can search what's actually *spoken* in a video, not just the caption. A separate `whisper-asr` container (`onerahmet/openai-whisper-asr-webservice`, faster-whisper engine, CPU) does the work; the app POSTs the raw video file and the service extracts the audio itself (it bundles ffmpeg), so the app needs no media tooling.
+
+Transcription is **decoupled from ingest** so a slow transcription never blocks downloads and videos are searchable by description immediately. The `Video` row carries its own `TranscriptStatus` (Pending → Completed/Skipped/Failed, plus `NotRequested` for the back-catalog); `TranscriptionBackgroundService` is the worker, mirroring the search outbox worker — it claims `Pending`/`Failed` rows, transcribes them, and on success writes the transcript **and** a `SearchIndexOperation` row in one `SaveChanges`, so the existing outbox re-indexes the video with its transcript. Failures retry under the same capped exponential backoff. The whole feature is gated behind `SpeechToText:Enabled`.
+
+**Confidence.** The client asks the engine for JSON output and derives a 0–1 confidence from the per-segment `avg_logprob` (duration-weighted, `exp()`-normalised). Transcripts below `SpeechToText:LowConfidenceThreshold` (default 0.5) — typically laughter, music, or background noise the model transcribes poorly — are logged as a warning and flagged in the UI (amber indicator on the card and in the Admin table, plus a dedicated **Low confidence** filter). Stored per-video in `TranscriptConfidence`.
+
+**Deleting a transcript.** A bad transcript can be deleted from the transcript dialog (Videos page) or the Admin table: it clears the text/confidence, marks the video `Skipped` (so a backfill won't re-transcribe it), and re-indexes so it drops out of search.
+
+**Managing transcription.** The Admin page has a **Transcription** tab showing status counts, a filterable/paged queue of videos (status, confidence, retry count, error), bulk **Retry failed** / **Transcribe back-catalog** actions, and per-row re-queue / delete. Each card on the Videos page also shows a transcription control: a 🎙️ button to queue, a clock while pending, a retry on failure, and a transcript icon once done (amber if low confidence; click to read or delete the transcript). All of it routes through `ITranscriptionService` (queue / delete / retry / backfill / counts), which is also exposed over the Admin API (`GET /api/admin/transcription/status`, `POST /api/admin/transcription/queue/{videoId}`, `.../{videoId}/delete`, `.../retry-failed`, `.../backfill`).
 
 ### Video ingestion pipeline
 
@@ -65,7 +77,7 @@ Shared UI primitives (`.btn`, `.card`, `.input`, `.chip`, `.badge`, `.spinner`, 
 
 ## Roadmap / remaining improvements
 
-1. **Speech-to-text search.** The planned reason for keeping OpenSearch: transcribe audio with a self-hosted Whisper model (as a new ingest pipeline stage), store transcripts with segment timestamps in MySQL, and index them for full-text search with highlighting and deep-links to the spoken moment. The ingestion pipeline and outbox are designed to take this as an additional stage.
+1. **Speech-to-text search — enhancements.** Core transcription is implemented (see *Speech-to-text transcription* above): a self-hosted Whisper container transcribes audio, transcripts are stored in MySQL and indexed for full-text search. Remaining: store **segment timestamps** (currently a flat transcript), add **search highlighting**, and **deep-link** results to the spoken moment in the player.
 2. **Tests.** There is no test project yet. The seams now exist (`IYtDlpService`, `TagParser`, `ISearchService`, the outbox worker) — start with unit tests for tag parsing and outbox retry behavior.
 3. **DTOs / view models.** EF entities are rendered directly in Razor components and serialized in API responses; introduce DTOs to decouple the schema from the UI.
 4. **`MediaFileValidationMiddleware` is dead code** — it is never registered in `Program.cs` and no static-file middleware serves `/media`. Wire it up or remove it.

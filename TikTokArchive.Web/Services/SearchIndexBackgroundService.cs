@@ -68,7 +68,10 @@ namespace TikTokArchive.Web.Services
             // Backoff eligibility is computed in memory because it depends on RetryCount;
             // the table only ever holds a handful of rows, so over-fetching is cheap.
             var now = DateTime.UtcNow;
+            // No-tracking: each operation is applied with a set-based ExecuteDelete/ExecuteUpdate
+            // keyed by Id, so the change tracker is never used to persist these rows.
             var candidates = await dbContext.SearchIndexOperations
+                .AsNoTracking()
                 .OrderBy(o => o.Id)
                 .Take(200)
                 .ToListAsync(cancellationToken);
@@ -110,6 +113,7 @@ namespace TikTokArchive.Web.Services
                 if (operation.OperationType == SearchIndexOperationType.Index)
                 {
                     var video = await dbContext.Videos
+                        .AsNoTracking()
                         .Include(v => v.Creator)
                         .Include(v => v.Tags).ThenInclude(vt => vt.Tag)
                         .FirstOrDefaultAsync(v => v.TikTokVideoId == operation.VideoId, cancellationToken);
@@ -130,8 +134,13 @@ namespace TikTokArchive.Web.Services
                     await searchService.DeleteVideoAsync(operation.VideoId, cancellationToken);
                 }
 
-                dbContext.SearchIndexOperations.Remove(operation);
-                await dbContext.SaveChangesAsync(cancellationToken);
+                // Idempotent removal. A set-based delete keyed by Id avoids the change tracker's
+                // "expected exactly 1 row" optimistic-concurrency check: under EnableRetryOnFailure
+                // a committed delete can be re-executed on a transient retry, and that must affect
+                // 0 rows harmlessly rather than throw DbUpdateConcurrencyException and crash the loop.
+                await dbContext.SearchIndexOperations
+                    .Where(o => o.Id == operation.Id)
+                    .ExecuteDeleteAsync(cancellationToken);
 
                 _logger.LogDebug("Processed {OperationType} for video {VideoId}",
                     operation.OperationType, operation.VideoId);
@@ -145,10 +154,14 @@ namespace TikTokArchive.Web.Services
                 _logger.LogError(ex, "Error processing {OperationType} for video {VideoId} (attempt {Attempt})",
                     operation.OperationType, operation.VideoId, operation.RetryCount + 1);
 
-                operation.RetryCount++;
-                operation.LastAttempt = DateTime.UtcNow;
-                operation.ErrorMessage = ex.GetFullMessage();
-                await dbContext.SaveChangesAsync(cancellationToken);
+                // Same reasoning as the delete above: a set-based update won't throw if the row
+                // is already gone (0 rows affected), so the worker loop survives.
+                await dbContext.SearchIndexOperations
+                    .Where(o => o.Id == operation.Id)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(o => o.RetryCount, operation.RetryCount + 1)
+                        .SetProperty(o => o.LastAttempt, DateTime.UtcNow)
+                        .SetProperty(o => o.ErrorMessage, ex.GetFullMessage()), cancellationToken);
             }
         }
     }

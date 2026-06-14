@@ -11,6 +11,17 @@ namespace TikTokArchive.Entities
         public DateTime CreatedAt { get; set; }
         public DateTime AddedToApp { get; set; }
 
+        // Speech-to-text. The transcription worker fills these in asynchronously after
+        // ingest; Transcript is indexed by the search engine so spoken content is searchable.
+        public TranscriptStatus TranscriptStatus { get; set; }
+        public string? Transcript { get; set; }
+        // 0–1 average token confidence from the speech-to-text engine; null if unknown
+        // (not transcribed, or transcribed before confidence was captured).
+        public double? TranscriptConfidence { get; set; }
+        public int TranscriptRetryCount { get; set; }
+        public DateTime? TranscriptLastAttempt { get; set; }
+        public string? TranscriptErrorMessage { get; set; }
+
         public virtual Creator Creator { get; set; }
         public virtual IEnumerable<VideoTag> Tags { get; set; }
     }

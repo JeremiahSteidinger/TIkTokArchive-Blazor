@@ -11,6 +11,7 @@ namespace TikTokArchive.Web.Services
         public string CreatorName { get; set; } = string.Empty;
         public string CreatorUsername { get; set; } = string.Empty;
         public List<string> Tags { get; set; } = new();
+        public string Transcript { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
         public DateTime AddedToApp { get; set; }
 
@@ -21,6 +22,7 @@ namespace TikTokArchive.Web.Services
             CreatorName = video.Creator?.DisplayName ?? string.Empty,
             CreatorUsername = video.Creator?.TikTokId ?? string.Empty,
             Tags = video.Tags?.Select(vt => vt.Tag.Name).ToList() ?? new List<string>(),
+            Transcript = video.Transcript ?? string.Empty,
             CreatedAt = video.CreatedAt,
             AddedToApp = video.AddedToApp
         };
@@ -29,9 +31,10 @@ namespace TikTokArchive.Web.Services
     public class OpenSearchService : ISearchService
     {
         // v2: tags and usernames are ngram-analyzed text (previously keyword + wildcard
-        // queries). A new name lets the corrected mapping apply without migrating the old
-        // index; the sync service repopulates it from the database.
-        public const string IndexName = "tiktok_videos_v2";
+        // queries). v3: adds the speech-to-text Transcript field to the mapping. A new name
+        // lets the new mapping apply on a fresh index without migrating the old one; the sync
+        // service repopulates it from the database.
+        public const string IndexName = "tiktok_videos_v3";
 
         private readonly IOpenSearchClient _client;
         private readonly ILogger<OpenSearchService> _logger;
@@ -112,6 +115,11 @@ namespace TikTokArchive.Web.Services
                                 .Analyzer("ngram_analyzer")
                                 .SearchAnalyzer("standard")
                                 .Fields(f => f.Keyword(k => k.Name("raw")))
+                            )
+                            .Text(t => t
+                                .Name(n => n.Transcript)
+                                .Analyzer("ngram_analyzer")
+                                .SearchAnalyzer("standard")
                             )
                             .Date(d => d.Name(n => n.CreatedAt))
                             .Date(d => d.Name(n => n.AddedToApp))
@@ -208,7 +216,7 @@ namespace TikTokArchive.Web.Services
 
                 if (fields == null || fields.Count == 0 || fields.Contains("all"))
                 {
-                    fields = new List<string> { "description", "creator", "tags" };
+                    fields = new List<string> { "description", "creator", "tags", "transcript" };
                 }
 
                 if (fields.Contains("description"))
@@ -240,6 +248,17 @@ namespace TikTokArchive.Web.Services
                         .Field(f => f.Tags)
                         .Query(query)
                         .Boost(1.0)
+                    ));
+                }
+
+                if (fields.Contains("transcript"))
+                {
+                    // Spoken content is noisier than a hand-written caption, so it ranks
+                    // below tags.
+                    shouldQueries.Add(q => q.Match(m => m
+                        .Field(f => f.Transcript)
+                        .Query(query)
+                        .Boost(0.75)
                     ));
                 }
 
