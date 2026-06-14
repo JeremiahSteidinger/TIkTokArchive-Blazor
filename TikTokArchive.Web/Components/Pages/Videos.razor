@@ -2,218 +2,223 @@
 @inject TikTokArchive.Web.Services.IVideoService VideoService
 @inject TikTokArchive.Web.Services.VideoIngestQueue IngestQueue
 @inject IJSRuntime JSRuntime
-@inject ISnackbar Snackbar
+@inject ToastService Toast
 @using TikTokArchive.Entities
 @using TikTokArchive.Web.Services
 @implements IDisposable
 
-<MudStack Spacing="3">
-    <MudPaper Class="pa-4">
-        <MudStack Spacing="2">
-            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
-                <MudText Typo="Typo.h6">Add Video</MudText>
-                <MudIconButton Icon="@(showAddVideo ? Icons.Material.Filled.Remove : Icons.Material.Filled.Add)"
-                               Color="Color.Primary"
-                               OnClick="@(() => showAddVideo = !showAddVideo)" />
-            </MudStack>
-            
-            @if (showAddVideo)
-            {
-                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                    <MudTextField @bind-Value="newVideoUrl"
-                                  Immediate="true"
-                                  Label="TikTok Video URL"
-                                  Variant="Variant.Outlined"
-                                  FullWidth="true"
-                                  Placeholder="Enter TikTok video URL" />
-                    <MudButton Variant="Variant.Filled"
-                               Color="Color.Primary"
-                               OnClick="SubmitVideo"
-                               Disabled="@(string.IsNullOrWhiteSpace(newVideoUrl))">
-                        <MudText>Submit</MudText>
-                    </MudButton>
-                </MudStack>
-            }
-        </MudStack>
-    </MudPaper>
+<div class="space-y-4">
+    <!-- Add Video -->
+    <div class="card">
+        <div class="flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-ink">Add Video</h2>
+            <button class="icon-btn" @onclick="@(() => showAddVideo = !showAddVideo)"
+                    title="@(showAddVideo ? "Hide" : "Add video")">
+                <Icon Name="@(showAddVideo ? "minus" : "plus")" />
+            </button>
+        </div>
 
+        @if (showAddVideo)
+        {
+            <div class="mt-3 flex flex-col gap-2 sm:flex-row">
+                <input class="input" @bind="newVideoUrl" @bind:event="oninput"
+                       placeholder="Enter TikTok video URL" aria-label="TikTok Video URL" />
+                <button class="btn btn-primary shrink-0" @onclick="SubmitVideo"
+                        disabled="@(string.IsNullOrWhiteSpace(newVideoUrl))">
+                    Submit
+                </button>
+            </div>
+        }
+    </div>
+
+    <!-- Downloads -->
     @if (ingestJobs.Count > 0)
     {
-        <MudPaper Class="pa-4">
-            <MudText Typo="Typo.subtitle1" Class="mb-2">Downloads</MudText>
-            <MudStack Spacing="1">
+        <div class="card">
+            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Downloads</h3>
+            <div class="space-y-2">
                 @foreach (var job in ingestJobs)
                 {
                     @if (job.Status == IngestJobStatus.Failed)
                     {
-                        <MudAlert Severity="Severity.Error"
-                                  Dense="true"
-                                  ShowCloseIcon="true"
-                                  CloseIconClicked="@(() => DismissJob(job))">
-                            <MudText Typo="Typo.body2" Style="word-break: break-all;">@job.Url</MudText>
-                            <MudText Typo="Typo.caption">@job.Error</MudText>
-                        </MudAlert>
+                        <div class="alert alert-danger">
+                            <Icon Name="error" Class="size-5 shrink-0 text-rose-500" />
+                            <div class="min-w-0 flex-1">
+                                <p class="break-all">@job.Url</p>
+                                <p class="text-xs opacity-80">@job.Error</p>
+                            </div>
+                            <button class="icon-btn size-7 shrink-0" @onclick="@(() => DismissJob(job))" title="Dismiss">
+                                <Icon Name="close" Class="size-4" />
+                            </button>
+                        </div>
                     }
                     else
                     {
-                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                            <MudProgressCircular Size="Size.Small" Indeterminate="true" />
-                            <MudText Typo="Typo.body2">@JobStatusText(job.Status)</MudText>
-                            <MudText Typo="Typo.caption" Style="overflow: hidden; text-overflow: ellipsis;">@job.Url</MudText>
-                        </MudStack>
+                        <div class="flex items-center gap-3">
+                            <span class="spinner size-4"></span>
+                            <span class="text-sm text-ink">@JobStatusText(job.Status)</span>
+                            <span class="min-w-0 truncate text-xs text-faint">@job.Url</span>
+                        </div>
                     }
                 }
-            </MudStack>
-        </MudPaper>
+            </div>
+        </div>
     }
 
+    <!-- Search -->
+    <div class="card">
+        <div class="relative">
+            <span class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-faint">
+                <Icon Name="search" Class="size-5" />
+            </span>
+            <input class="input pl-10" @bind="searchQuery" @bind:event="oninput" @onkeyup="HandleSearchKeyUp"
+                   placeholder="Search descriptions, creators, or tags" aria-label="Search videos" />
+        </div>
 
-    <MudPaper Class="pa-4">
-        <MudStack Spacing="2">
-            <MudTextField @bind-Value="searchQuery"
-                          Label="Search videos"
-                          Variant="Variant.Outlined"
-                          Placeholder="Search descriptions, creators, or tags"
-                          Adornment="Adornment.End"
-                          AdornmentIcon="@Icons.Material.Filled.Search"
-                          OnKeyUp="HandleSearchKeyUp"
-                          Immediate="false" />
-            
-            <MudStack Row="true" Spacing="1">
-                <MudText Typo="Typo.caption" Class="align-self-center">Search in:</MudText>
-                <MudChip T="string"
-                         Color="@(searchFields.Contains("all") ? Color.Primary : Color.Default)"
-                         OnClick="@(() => ToggleSearchField("all"))"
-                         Style="cursor: pointer;">
-                    All
-                </MudChip>
-                <MudChip T="string"
-                         Color="@(searchFields.Contains("description") ? Color.Primary : Color.Default)"
-                         OnClick="@(() => ToggleSearchField("description"))"
-                         Style="cursor: pointer;">
-                    Description
-                </MudChip>
-                <MudChip T="string"
-                         Color="@(searchFields.Contains("creator") ? Color.Primary : Color.Default)"
-                         OnClick="@(() => ToggleSearchField("creator"))"
-                         Style="cursor: pointer;">
-                    Creator
-                </MudChip>
-                <MudChip T="string"
-                         Color="@(searchFields.Contains("tags") ? Color.Primary : Color.Default)"
-                         OnClick="@(() => ToggleSearchField("tags"))"
-                         Style="cursor: pointer;">
-                    Tags
-                </MudChip>
-            </MudStack>
-        </MudStack>
-    </MudPaper>
-        @if (!string.IsNullOrEmpty(selectedTag))
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+            <span class="text-xs text-faint">Search in:</span>
+            @foreach (var field in searchFieldOptions)
+            {
+                var active = searchFields.Contains(field.Key);
+                <button class="@($"chip {(active ? "chip-active" : "chip-inactive")}")"
+                        @onclick="@(() => ToggleSearchField(field.Key))">
+                    @field.Label
+                </button>
+            }
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(selectedTag))
     {
-        <MudChip T="string" 
-                 Color="Color.Primary" 
-                 OnClose="ClearTagFilter"
-                 CloseIcon="@Icons.Material.Filled.Cancel"
-                 Style="max-width: fit-content;">
-            Filtered by: @selectedTag
-        </MudChip>
+        <div>
+            <span class="badge bg-sky-600 text-white">
+                Filtered by: @selectedTag
+                <button @onclick="ClearTagFilter" class="ml-1 text-sky-100 hover:text-white" aria-label="Clear filter">
+                    <Icon Name="close" Class="size-3.5" />
+                </button>
+            </span>
+        </div>
     }
-</MudStack>
+</div>
 
 @if (isLoading)
 {
-    <MudProgressCircular Color="Color.Primary" Indeterminate="true" Class="mt-4" />
+    <div class="mt-8 flex justify-center">
+        <span class="spinner size-8"></span>
+    </div>
 }
 else
 {
-    <MudStack Spacing="3" Class="mt-4">
+    <div class="mt-6 space-y-5">
         @if (!videos.Any())
         {
-            <MudAlert Severity="Severity.Info">
+            <div class="alert alert-info items-center">
+                <Icon Name="info" Class="size-5 shrink-0 text-sky-500" />
                 @if (!string.IsNullOrEmpty(selectedTag))
                 {
-                    <text>No videos found with tag "@selectedTag"</text>
+                    <span>No videos found with tag "@selectedTag".</span>
                 }
                 else
                 {
-                    <text>No videos found.</text>
+                    <span>No videos found.</span>
                 }
-            </MudAlert>
+            </div>
         }
         else
         {
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; width: 100%;">
+            <div class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-5">
                 @foreach (var video in videos)
                 {
-                    <MudCard>
-                        <MudCardContent>
-                            @if (!string.IsNullOrWhiteSpace(video.TikTokVideoId)){
+                    <div class="flex flex-col overflow-hidden rounded-xl border border-line bg-surface">
+                        <div class="p-3">
+                            @if (!string.IsNullOrWhiteSpace(video.TikTokVideoId))
+                            {
                                 var videoUrl = $"/api/video/{video.TikTokVideoId}/stream";
                                 var posterUrl = $"/api/video/{video.TikTokVideoId}/thumbnail";
                                 <video id="@video.Id"
                                        controls
                                        preload="metadata"
-                                       width="100%"
-                                       height="auto"
-                                       style="max-width: 640px; background-color: #000;"
+                                       class="w-full rounded-lg bg-black"
                                        poster="@posterUrl">
                                     <source src="@videoUrl" type="video/mp4" />
                                     Your browser does not support the video tag.
                                 </video>
                             }
-                            <MudText Typo="Typo.subtitle1" Class="mt-2">
-                                @video.Creator?.DisplayName
-                            </MudText>
-                            <MudText Typo="Typo.body2" Class="mb-2">
-                                @video.Description
-                            </MudText>
-                            <MudStack Row="true" Wrap="Wrap.Wrap" Spacing="1">
-                                @foreach(var tag in video.Tags)
-                                {
-                                    <MudChip T="string" 
-                                             Color="@(selectedTag == tag.Tag.Name ? Color.Secondary : Color.Primary)"
-                                             OnClick="@(() => FilterByTag(tag.Tag.Name))"
-                                             Style="cursor: pointer;">
-                                        @tag.Tag.Name
-                                    </MudChip>
-                                }
-                            </MudStack>
-                        </MudCardContent>
-                        <MudCardActions>
-                            <MudIconButton Icon="@Icons.Material.Filled.Download" 
-                                           Color="Color.Primary" 
-                                           Href="@GetDownloadUrl(video.TikTokVideoId)"
-                                           Target="_blank"
-                                           Title="Download video" />
-                            <MudSpacer />
-                            <MudIconButton Icon="@Icons.Material.Filled.Delete" 
-                                           Color="Color.Error" 
-                                           OnClick="@(() => DeleteVideo(video.TikTokVideoId))"
-                                           Title="Delete video" />
-                        </MudCardActions>
-                    </MudCard>
+                            <p class="mt-3 text-sm font-semibold text-ink">@video.Creator?.DisplayName</p>
+                            <p class="mt-1 text-sm text-muted">@video.Description</p>
+                            @if (video.Tags.Any())
+                            {
+                                <div class="mt-3 flex flex-wrap gap-1.5">
+                                    @foreach (var tag in video.Tags)
+                                    {
+                                        var tagActive = selectedTag == tag.Tag.Name;
+                                        <button class="@($"chip {(tagActive ? "bg-rose-600 text-white" : "bg-surface-2 text-sky-700 hover:text-sky-500 dark:text-sky-300 dark:hover:text-sky-200")}")"
+                                                @onclick="@(() => FilterByTag(tag.Tag.Name))">
+                                            #@tag.Tag.Name
+                                        </button>
+                                    }
+                                </div>
+                            }
+                        </div>
+                        <div class="mt-auto flex items-center justify-between border-t border-line px-3 py-2">
+                            <a class="icon-btn" href="@GetDownloadUrl(video.TikTokVideoId)" target="_blank" title="Download video">
+                                <Icon Name="download" />
+                            </a>
+                            <button class="icon-btn hover:bg-rose-500/10 hover:text-rose-500"
+                                    @onclick="@(() => DeleteVideo(video.TikTokVideoId))" title="Delete video">
+                                <Icon Name="trash" />
+                            </button>
+                        </div>
+                    </div>
                 }
             </div>
 
             @if (totalPages > 1)
             {
-                <MudPagination 
-                    Count="@totalPages" 
-                    Selected="@currentPage" 
-                    SelectedChanged="@OnPageChanged"
-                    Color="Color.Primary"
-                    ShowFirstButton="true"
-                    ShowLastButton="true" />
-                
-                <MudText Typo="Typo.caption" Align="Align.Center">
-                    Showing @((currentPage - 1) * pageSize + 1) to @Math.Min(currentPage * pageSize, totalCount) of @totalCount videos
-                </MudText>
+                <div class="flex flex-col items-center gap-2 pt-2">
+                    <nav class="flex items-center gap-1">
+                        <button class="icon-btn" disabled="@(currentPage == 1)"
+                                @onclick="@(() => OnPageChanged(1))" title="First page">
+                            <Icon Name="chevron-double-left" Class="size-4" />
+                        </button>
+                        <button class="icon-btn" disabled="@(currentPage == 1)"
+                                @onclick="@(() => OnPageChanged(currentPage - 1))" title="Previous page">
+                            <Icon Name="chevron-left" Class="size-4" />
+                        </button>
+                        @foreach (var page in PageNumbers())
+                        {
+                            <button class="@($"inline-flex h-9 min-w-9 items-center justify-center rounded-lg px-3 text-sm font-medium transition-colors {(page == currentPage ? "bg-sky-600 text-white" : "text-muted hover:bg-surface-2")}")"
+                                    @onclick="@(() => OnPageChanged(page))">
+                                @(page)
+                            </button>
+                        }
+                        <button class="icon-btn" disabled="@(currentPage == totalPages)"
+                                @onclick="@(() => OnPageChanged(currentPage + 1))" title="Next page">
+                            <Icon Name="chevron-right" Class="size-4" />
+                        </button>
+                        <button class="icon-btn" disabled="@(currentPage == totalPages)"
+                                @onclick="@(() => OnPageChanged(totalPages))" title="Last page">
+                            <Icon Name="chevron-double-right" Class="size-4" />
+                        </button>
+                    </nav>
+                    <p class="text-xs text-faint">
+                        Showing @((currentPage - 1) * pageSize + 1) to @Math.Min(currentPage * pageSize, totalCount) of @totalCount videos
+                    </p>
+                </div>
             }
         }
-    </MudStack>
+    </div>
 }
 
 @code {
+    private static readonly (string Key, string Label)[] searchFieldOptions =
+    {
+        ("all", "All"),
+        ("description", "Description"),
+        ("creator", "Creator"),
+        ("tags", "Tags")
+    };
+
     private List<Video> videos = new();
     private HashSet<string> loadedVideos = new();
     private string? selectedTag;
@@ -231,6 +236,17 @@ else
     private IReadOnlyList<IngestJob> ingestJobs = Array.Empty<IngestJob>();
     private readonly HashSet<Guid> notifiedJobs = new();
     private System.Timers.Timer? jobPollTimer;
+
+    private IEnumerable<int> PageNumbers()
+    {
+        const int window = 2;
+        var start = Math.Max(1, currentPage - window);
+        var end = Math.Min(totalPages, currentPage + window);
+        for (var i = start; i <= end; i++)
+        {
+            yield return i;
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -263,7 +279,7 @@ else
         {
             var searchQueryParam = string.IsNullOrWhiteSpace(searchQuery) ? null : searchQuery;
             var searchFieldsParam = searchFields.Contains("all") ? null : searchFields;
-            
+
             var (loadedVideos, count) = await VideoService.GetVideosAsync(currentPage, pageSize, selectedTag, searchQueryParam, searchFieldsParam);
             videos = loadedVideos;
             totalCount = count;
@@ -320,7 +336,7 @@ else
                 searchFields.Add(field);
             }
         }
-        
+
         if (!string.IsNullOrWhiteSpace(searchQuery))
         {
             currentPage = 1;
@@ -333,14 +349,14 @@ else
         try
         {
             IngestQueue.Enqueue(newVideoUrl);
-            Snackbar.Add("Video queued for download", Severity.Info);
+            Toast.Show("Video queued for download", ToastSeverity.Info);
             newVideoUrl = string.Empty;
             RefreshIngestJobList();
             StartJobPolling();
         }
         catch (ArgumentException ex)
         {
-            Snackbar.Add(ex.Message, Severity.Warning);
+            Toast.Show(ex.Message, ToastSeverity.Warning);
         }
     }
 
@@ -375,11 +391,11 @@ else
         {
             if (job.Status == IngestJobStatus.Completed)
             {
-                Snackbar.Add("Video added successfully!", Severity.Success);
+                Toast.Show("Video added successfully!", ToastSeverity.Success);
             }
             else
             {
-                Snackbar.Add($"Video download failed: {job.Error}", Severity.Error);
+                Toast.Show($"Video download failed: {job.Error}", ToastSeverity.Error);
             }
         }
 
@@ -446,19 +462,19 @@ else
         try
         {
             await VideoService.DeleteVideoAsync(videoId);
-            
+
             if (videos.Count == 1 && currentPage > 1)
             {
                 currentPage--;
             }
-            
+
             await LoadVideos();
-            Snackbar.Add("Video deleted successfully", Severity.Success);
+            Toast.Show("Video deleted successfully", ToastSeverity.Success);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error deleting video: {ex.Message}");
-            Snackbar.Add($"Error deleting video: {ex.Message}", Severity.Error);
+            Toast.Show($"Error deleting video: {ex.Message}", ToastSeverity.Error);
         }
     }
 

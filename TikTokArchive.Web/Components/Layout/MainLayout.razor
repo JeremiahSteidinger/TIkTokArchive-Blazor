@@ -1,20 +1,42 @@
-﻿@inherits LayoutComponentBase
+@inherits LayoutComponentBase
 
-<MudThemeProvider IsDarkMode="true" />
-<MudPopoverProvider />
-<MudDialogProvider />
-<MudSnackbarProvider />
+@{
+    const string navClass = "flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surface-2 hover:text-ink [&.active]:bg-surface-2 [&.active]:text-ink";
+}
 
-<MudLayout>
-    <MudAppBar Elevation="1">
-        <MudText Typo="Typo.h5" Class="ml-3">TikTok Archive</MudText>
-    </MudAppBar>
-    <MudMainContent>
-        <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="ma-4">
+<div class="min-h-screen">
+    <!-- Horizontal top navigation -->
+    <header class="sticky top-0 z-30 border-b border-line bg-page/85 backdrop-blur">
+        <div class="mx-auto flex h-16 max-w-screen-2xl items-center gap-2 px-4 md:gap-4 md:px-8">
+            <span class="mr-1 shrink-0 bg-linear-to-r from-cyan-500 to-rose-500 bg-clip-text text-lg font-bold tracking-tight text-transparent md:mr-2">
+                TikTok Archive
+            </span>
+            <nav class="flex items-center gap-1">
+                <NavLink class="@navClass" href="" Match="NavLinkMatch.All">
+                    <Icon Name="home" Class="size-5" /> <span class="hidden sm:inline">Home</span>
+                </NavLink>
+                <NavLink class="@navClass" href="videos">
+                    <Icon Name="video" Class="size-5" /> <span class="hidden sm:inline">Videos</span>
+                </NavLink>
+                <NavLink class="@navClass" href="admin">
+                    <Icon Name="cog" Class="size-5" /> <span class="hidden sm:inline">Admin</span>
+                </NavLink>
+            </nav>
+            <div class="ml-auto">
+                <ThemeToggle />
+            </div>
+        </div>
+    </header>
+
+    <!-- Content -->
+    <main>
+        <div class="mx-auto w-full max-w-screen-2xl px-4 py-6 md:px-8 md:py-8">
             @Body
-        </MudContainer>
-    </MudMainContent>
-</MudLayout>
+        </div>
+    </main>
+</div>
+
+<ToastHost />
 
 <div id="blazor-error-ui" data-nosnippet>
     An unhandled error has occurred.

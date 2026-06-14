@@ -366,3 +366,7 @@ FodyWeavers.xsd
 docker-compose.override.yml
 /TikTokArchive.Migration
 /TikTokArchive.Web/data
+
+# Tailwind CSS standalone CLI binary (downloaded on build).
+# The generated wwwroot/app.css is kept in source control (regenerated on build).
+/TikTokArchive.Web/.tailwind/

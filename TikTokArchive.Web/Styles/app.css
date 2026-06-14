@@ -1,0 +1,197 @@
+@import "tailwindcss";
+
+/* Tell Tailwind where to scan for class usage (Razor markup + code-behind). */
+@source "../Components/**/*.{razor,html,cs}";
+
+/* Drive `dark:` utilities from a `dark` class on <html> (toggled by ThemeToggle). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+}
+
+/* Semantic neutral palette. The utilities (bg-page, bg-surface, text-ink, …)
+   resolve to the --app-* variables below, which swap between light and dark. */
+@theme inline {
+    --color-page: var(--app-page);
+    --color-surface: var(--app-surface);
+    --color-surface-2: var(--app-surface-2);
+    --color-line: var(--app-line);
+    --color-ink: var(--app-ink);
+    --color-muted: var(--app-muted);
+    --color-faint: var(--app-faint);
+}
+
+:root {
+    color-scheme: light;
+    --app-page: #f8fafc;       /* page background (slate-50) */
+    --app-surface: #ffffff;    /* cards, inputs */
+    --app-surface-2: #f1f5f9;  /* hovers, table headers (slate-100) */
+    --app-line: #e2e8f0;       /* borders (slate-200) */
+    --app-ink: #18181b;        /* primary text (zinc-900) */
+    --app-muted: #52525b;      /* secondary text (zinc-600) */
+    --app-faint: #71717a;      /* faint text (zinc-500) */
+}
+
+.dark {
+    color-scheme: dark;
+    --app-page: #09090b;       /* zinc-950 */
+    --app-surface: #18181b;    /* zinc-900 */
+    --app-surface-2: #27272a;  /* zinc-800 */
+    --app-line: #27272a;       /* zinc-800 */
+    --app-ink: #f4f4f5;        /* zinc-100 */
+    --app-muted: #a1a1aa;      /* zinc-400 */
+    --app-faint: #71717a;      /* zinc-500 */
+}
+
+@layer base {
+    html {
+        height: 100%;
+    }
+
+    body {
+        height: 100%;
+        margin: 0;
+        @apply bg-page text-ink font-sans antialiased;
+    }
+
+    /* Thin theme-aware scrollbars. */
+    * {
+        scrollbar-width: thin;
+        scrollbar-color: var(--app-line) transparent;
+    }
+
+    /* FocusOnNavigate focuses the page <h1> for screen readers; suppress the
+       visible outline box (matches the default Blazor template behaviour). */
+    h1:focus,
+    h1:focus-visible {
+        outline: none;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+   Reusable component classes. Neutrals use the semantic tokens above; status
+   colors carry their own light/dark treatment so they read in both themes.
+   --------------------------------------------------------------------------- */
+@layer components {
+    .card {
+        @apply rounded-xl border border-line bg-surface p-4 sm:p-5;
+    }
+
+    .btn {
+        @apply inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/70 disabled:pointer-events-none disabled:opacity-50;
+    }
+
+    .btn-primary {
+        @apply bg-sky-600 text-white hover:bg-sky-500;
+    }
+
+    .btn-danger {
+        @apply bg-rose-600 text-white hover:bg-rose-500;
+    }
+
+    .btn-ghost {
+        @apply text-muted hover:bg-surface-2 hover:text-ink;
+    }
+
+    .icon-btn {
+        @apply inline-flex size-9 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/70 disabled:pointer-events-none disabled:opacity-50;
+    }
+
+    .input {
+        @apply w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500;
+    }
+
+    .label {
+        @apply mb-1.5 block text-sm font-medium text-muted;
+    }
+
+    .chip {
+        @apply inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors;
+    }
+
+    .chip-active {
+        @apply bg-sky-600 text-white;
+    }
+
+    .chip-inactive {
+        @apply bg-surface-2 text-muted hover:text-ink;
+    }
+
+    .badge {
+        @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium;
+    }
+
+    .badge-info {
+        @apply bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300;
+    }
+
+    .badge-success {
+        @apply bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300;
+    }
+
+    .badge-danger {
+        @apply bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300;
+    }
+
+    .alert {
+        @apply flex items-start gap-3 rounded-lg border px-3 py-2 text-sm;
+    }
+
+    .alert-info {
+        @apply border-sky-500/40 bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-200;
+    }
+
+    .alert-success {
+        @apply border-emerald-500/40 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200;
+    }
+
+    .alert-danger {
+        @apply border-rose-500/40 bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-200;
+    }
+
+    .spinner {
+        @apply inline-block size-5 animate-spin rounded-full border-2 border-surface-2 border-t-sky-500;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+   Blazor framework UI (lives outside the component tree, styled globally).
+   --------------------------------------------------------------------------- */
+
+#blazor-error-ui {
+    background: #451a1a;
+    color: #fecaca;
+    bottom: 0;
+    box-shadow: 0 -1px 2px rgba(0, 0, 0, 0.4);
+    box-sizing: border-box;
+    display: none;
+    left: 0;
+    padding: 0.6rem 1.25rem 0.7rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 1000;
+}
+
+#blazor-error-ui .dismiss {
+    cursor: pointer;
+    position: absolute;
+    right: 0.75rem;
+    top: 0.5rem;
+}
+
+#blazor-error-ui a {
+    color: #fca5a5;
+    text-decoration: underline;
+}
+
+.blazor-error-boundary {
+    background: #b32121;
+    padding: 1rem;
+    color: white;
+}
+
+.blazor-error-boundary::after {
+    content: "An error has occurred.";
+}
