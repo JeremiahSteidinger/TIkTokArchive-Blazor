@@ -1,0 +1,155 @@
+@page "/creators"
+@inject TikTokArchive.Web.Services.IVideoService VideoService
+@inject NavigationManager Nav
+@using TikTokArchive.Entities
+@using TikTokArchive.Web.Services
+@implements IDisposable
+
+<PageTitle>Creators</PageTitle>
+
+<div class="space-y-4">
+    <div class="card">
+        <h1 class="text-lg font-semibold text-ink">Creators</h1>
+        <div class="relative mt-3">
+            <span class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-faint">
+                <Icon Name="search" Class="size-5" />
+            </span>
+            <input class="input pl-10" @bind="searchQuery" @bind:event="oninput" @onkeyup="HandleSearchKeyUp"
+                   placeholder="Search creators by name or @@username" aria-label="Search creators" />
+        </div>
+    </div>
+</div>
+
+@if (isLoading)
+{
+    <div class="mt-8 flex justify-center">
+        <span class="spinner size-8"></span>
+    </div>
+}
+else
+{
+    <div class="mt-6 space-y-5">
+        @if (!creators.Any())
+        {
+            <div class="alert alert-info items-center">
+                <Icon Name="info" Class="size-5 shrink-0 text-sky-500" />
+                @if (!string.IsNullOrWhiteSpace(searchQuery))
+                {
+                    <span>No creators match "@searchQuery".</span>
+                }
+                else
+                {
+                    <span>No creators found.</span>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
+                @foreach (var c in creators)
+                {
+                    <a href="@($"/creator/{c.Id}?from=creators")"
+                       class="flex items-center gap-3 rounded-xl border border-line bg-surface p-3 transition-colors hover:border-sky-500/60 hover:bg-surface-2">
+                        <div class="flex size-12 shrink-0 items-center justify-center rounded-full bg-linear-to-br from-cyan-500/20 to-rose-500/20 text-lg font-semibold text-ink">
+                            @InitialOf(c.DisplayName)
+                        </div>
+                        <div class="min-w-0">
+                            <p class="truncate text-sm font-semibold text-ink">@c.DisplayName</p>
+                            <p class="truncate text-xs text-muted">@($"@{c.TikTokId}")</p>
+                            <p class="mt-0.5 text-xs text-faint">@c.VideoCount @(c.VideoCount == 1 ? "video" : "videos")</p>
+                        </div>
+                    </a>
+                }
+            </div>
+
+            <Pagination CurrentPage="currentPage" TotalPages="totalPages" PageSize="pageSize"
+                        TotalItems="totalCount" PageUrl="PageUrl" ItemNoun="creators" />
+        }
+    </div>
+}
+
+@code {
+    [SupplyParameterFromQuery] public int? Page { get; set; }
+
+    private List<CreatorListItem> creators = new();
+    private string searchQuery = string.Empty;
+    private bool isLoading = true;
+    private int currentPage = 1;
+    private int pageSize = 30;
+    private int totalCount;
+    private int totalPages => (int)Math.Ceiling(totalCount / (double)pageSize);
+    private System.Timers.Timer? searchDebounceTimer;
+
+    // Re-runs on first load and whenever ?page= changes (including browser back/forward).
+    protected override async Task OnParametersSetAsync()
+    {
+        currentPage = Page is int p && p > 0 ? p : 1;
+        await LoadCreators();
+    }
+
+    private string PageUrl(int page) => page <= 1 ? "creators" : $"creators?page={page}";
+
+    private async Task LoadCreators(bool showLoading = true)
+    {
+        if (showLoading)
+        {
+            isLoading = true;
+        }
+
+        try
+        {
+            var search = string.IsNullOrWhiteSpace(searchQuery) ? null : searchQuery;
+            var result = await VideoService.GetCreatorsAsync(currentPage, pageSize, search);
+            creators = result.Creators;
+            totalCount = result.TotalCount;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading creators: {ex.Message}");
+            creators = new List<CreatorListItem>();
+            totalCount = 0;
+        }
+        finally
+        {
+            if (showLoading)
+            {
+                isLoading = false;
+            }
+        }
+    }
+
+    private void HandleSearchKeyUp(KeyboardEventArgs e)
+    {
+        searchDebounceTimer?.Stop();
+        searchDebounceTimer = new System.Timers.Timer(500);
+        searchDebounceTimer.Elapsed += async (sender, args) =>
+        {
+            searchDebounceTimer?.Stop();
+            await InvokeAsync(async () =>
+            {
+                await ResetToFirstPage();
+                StateHasChanged();
+            });
+        };
+        searchDebounceTimer.Start();
+    }
+
+    // A filter change resets to page 1. If we're past page 1, navigate so the URL drops the
+    // stale ?page= (which reloads via OnParametersSetAsync); otherwise just reload in place.
+    private async Task ResetToFirstPage()
+    {
+        if (currentPage != 1)
+        {
+            Nav.NavigateTo(PageUrl(1));
+        }
+        else
+        {
+            await LoadCreators();
+        }
+    }
+
+    public void Dispose() => searchDebounceTimer?.Dispose();
+
+    private static string InitialOf(string? name) =>
+        string.IsNullOrWhiteSpace(name) ? "?" : name.Trim()[..1].ToUpperInvariant();
+}
