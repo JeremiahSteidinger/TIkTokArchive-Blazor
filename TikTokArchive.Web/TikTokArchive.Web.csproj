@@ -22,7 +22,6 @@
     </PackageReference>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.11" />
     <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.23.0" />
-    <PackageReference Include="MudBlazor" Version="8.15.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="OpenSearch.Client" Version="1.8.0" />
   </ItemGroup>
@@ -32,5 +31,52 @@
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+  <!-- ===================================================================
+       Tailwind CSS (standalone CLI - no Node/npm required).
+       The CLI binary is downloaded on first build into .tailwind/ and then
+       compiles Styles/app.css -> wwwroot/app.css. Runs before the static web
+       asset pipeline so the generated CSS gets picked up and fingerprinted.
+       =================================================================== -->
+  <PropertyGroup>
+    <TailwindVersion>v4.3.1</TailwindVersion>
+    <TailwindDir>$(MSBuildProjectDirectory)/.tailwind</TailwindDir>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <TailwindAsset>tailwindcss-windows-x64.exe</TailwindAsset>
+    <TailwindExe>tailwindcss.exe</TailwindExe>
+  </PropertyGroup>
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+    <TailwindAsset>tailwindcss-linux-x64</TailwindAsset>
+    <TailwindExe>tailwindcss</TailwindExe>
+  </PropertyGroup>
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX')) and '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">
+    <TailwindAsset>tailwindcss-macos-arm64</TailwindAsset>
+    <TailwindExe>tailwindcss</TailwindExe>
+  </PropertyGroup>
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX')) and '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'X64'">
+    <TailwindAsset>tailwindcss-macos-x64</TailwindAsset>
+    <TailwindExe>tailwindcss</TailwindExe>
+  </PropertyGroup>
+  <PropertyGroup>
+    <TailwindCli>$(TailwindDir)/$(TailwindExe)</TailwindCli>
+  </PropertyGroup>
+
+  <Target Name="DownloadTailwindCli" BeforeTargets="BuildTailwindCss" Condition="!Exists('$(TailwindCli)')">
+    <Message Importance="high" Text="Downloading Tailwind CSS CLI $(TailwindVersion) ($(TailwindAsset))..." />
+    <MakeDir Directories="$(TailwindDir)" />
+    <DownloadFile SourceUrl="https://github.com/tailwindlabs/tailwindcss/releases/download/$(TailwindVersion)/$(TailwindAsset)"
+                  DestinationFolder="$(TailwindDir)"
+                  DestinationFileName="$(TailwindExe)"
+                  Retries="3" />
+    <Exec Condition="!$([MSBuild]::IsOSPlatform('Windows'))" Command="chmod +x &quot;$(TailwindCli)&quot;" />
+  </Target>
+
+  <Target Name="BuildTailwindCss" BeforeTargets="ResolveStaticWebAssetsInputs;Build">
+    <Message Importance="high" Text="Building Tailwind CSS -> wwwroot/app.css" />
+    <Exec Command="&quot;$(TailwindCli)&quot; --input Styles/app.css --output wwwroot/app.css --minify"
+          WorkingDirectory="$(MSBuildProjectDirectory)" />
+  </Target>
 
 </Project>

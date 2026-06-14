@@ -1,0 +1,34 @@
+@* Light/dark theme toggle. The actual class swap + persistence happens in JS
+   (defined in App.razor); this just reflects and flips the current state. *@
+@inject IJSRuntime JS
+
+<button class="icon-btn" @onclick="Toggle"
+        title="@(isDark ? "Switch to light mode" : "Switch to dark mode")"
+        aria-label="Toggle theme">
+    <Icon Name="@(isDark ? "sun" : "moon")" />
+</button>
+
+@code {
+    private bool isDark = true;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Sync the icon with the theme the head script already applied.
+            var theme = await JS.InvokeAsync<string>("getTheme");
+            var nowDark = theme == "dark";
+            if (nowDark != isDark)
+            {
+                isDark = nowDark;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task Toggle()
+    {
+        isDark = !isDark;
+        await JS.InvokeAsync<string>("setTheme", isDark ? "dark" : "light");
+    }
+}

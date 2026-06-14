@@ -1,8 +1,8 @@
 # TikTok Archive (Blazor)
 
-A self-hosted TikTok video archive. Paste a TikTok URL and the app downloads the video and thumbnail with `yt-dlp`, extracts metadata and hashtags, and stores everything in MySQL with media on disk. Videos are browsable, streamable, taggable, and searchable through a Blazor Server UI (MudBlazor), with full-text search backed by OpenSearch. Runs in Docker; not internet-facing, so there is no authentication.
+A self-hosted TikTok video archive. Paste a TikTok URL and the app downloads the video and thumbnail with `yt-dlp`, extracts metadata and hashtags, and stores everything in MySQL with media on disk. Videos are browsable, streamable, taggable, and searchable through a Blazor Server UI styled with Tailwind CSS, with full-text search backed by OpenSearch. Runs in Docker; not internet-facing, so there is no authentication.
 
-**Stack:** .NET 10 / Blazor Server · MudBlazor · EF Core (Pomelo MySQL) · OpenSearch 2.x · yt-dlp · Docker Compose
+**Stack:** .NET 10 / Blazor Server · Tailwind CSS v4 · EF Core (Pomelo MySQL) · OpenSearch 2.x · yt-dlp · Docker Compose
 
 ---
 
@@ -45,6 +45,21 @@ docker compose up -d
 ```
 
 Requires the `MYSQL_CONNECTION_STRING` environment variable (see `docker-compose.override.yml` for the development setup). The app listens on `${APP_PORT:-8080}`.
+
+### Styling (Tailwind CSS)
+
+The UI is styled with **Tailwind CSS v4** via the **standalone CLI** — no Node/npm required. An MSBuild target in `TikTokArchive.Web.csproj` downloads the platform-specific CLI binary to `TikTokArchive.Web/.tailwind/` on first build and compiles `Styles/app.css` → `wwwroot/app.css` (minified) before the static-asset pipeline runs. Both `.tailwind/` and the generated `wwwroot/app.css` are git-ignored; a normal `dotnet build` / `dotnet publish` (including the Docker build) regenerates the CSS.
+
+For a fast edit loop during development, run the CLI in watch mode in a second terminal:
+
+```bash
+# from TikTokArchive.Web/
+.tailwind/tailwindcss --input Styles/app.css --output wwwroot/app.css --watch
+```
+
+Shared UI primitives (`.btn`, `.card`, `.input`, `.chip`, `.badge`, `.spinner`, …) are defined once in `Styles/app.css`; reusable Razor components live in `Components/Components/` (`Icon`, `ToastHost`, `ThemeToggle`, `ImportErrorDialog`). Toast notifications are provided by `ToastService` (replacing the previous MudBlazor `ISnackbar`).
+
+**Light/dark theme:** neutrals are driven by semantic CSS-variable tokens (`bg-page`, `bg-surface`, `text-ink`, `text-muted`, `border-line`, …) defined for `:root` and `.dark` in `Styles/app.css`. `ThemeToggle` flips the `dark` class on `<html>` and persists the choice to `localStorage`; an inline script in `App.razor` applies the saved (or OS-preferred) theme before first paint to avoid a flash.
 
 ---
 

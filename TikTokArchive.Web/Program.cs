@@ -2,7 +2,6 @@ using Microsoft.EntityFrameworkCore;
 using OpenSearch.Client;
 using TikTokArchive.Entities;
 using TikTokArchive.Web.Components;
-using MudBlazor.Services;
 using TikTokArchive.Web.HealthChecks;
 using TikTokArchive.Web.Options;
 using TikTokArchive.Web.Services;
@@ -94,7 +93,8 @@ namespace TikTokArchive.Web
             builder.Services.AddRazorComponents()
                 .AddInteractiveServerComponents();
 
-            builder.Services.AddMudServices();
+            // Per-circuit toast notifications (replaces MudBlazor's ISnackbar).
+            builder.Services.AddScoped<ToastService>();
 
             var app = builder.Build();
 

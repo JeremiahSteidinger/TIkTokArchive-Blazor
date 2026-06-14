@@ -12,6 +12,7 @@
 **/*.dbmdl
 **/*.jfm
 **/azds.yaml
+**/.tailwind
 **/bin
 **/charts
 **/docker-compose*

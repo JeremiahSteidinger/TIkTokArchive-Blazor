@@ -4,243 +4,254 @@
 @using TikTokArchive.Web.Services
 @inject TikTokArchiveDbContext DbContext
 @inject ReindexCoordinator ReindexCoordinator
-@inject ISnackbar Snackbar
-@inject IDialogService DialogService
+@inject ToastService Toast
 @implements IDisposable
 
 <PageTitle>Admin - Configuration</PageTitle>
 
-<MudText Typo="Typo.h4" Class="mb-4">Administration</MudText>
+<h1 class="mb-6 text-2xl font-bold text-ink">Administration</h1>
 
-<MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-4">
-<MudTabPanel Text="Search Index">
-<MudGrid>
-    <MudItem xs="12" md="6">
-        <MudPaper Class="pa-4">
-            <MudText Typo="Typo.h6" Class="mb-3">Configuration</MudText>
+<div class="mb-5 flex gap-1 border-b border-line">
+    <button class="@TabClass(0)" @onclick="@(() => activeTab = 0)">Search Index</button>
+    <button class="@TabClass(1)" @onclick="@(() => activeTab = 1)">Local Import</button>
+</div>
 
-            <MudNumericField @bind-Value="syncIntervalMinutes"
-                             Label="Sync Interval (minutes)"
-                             Min="1"
-                             Max="1440"
-                             Variant="Variant.Outlined"
-                             Class="mb-3" />
+@if (activeTab == 0)
+{
+    <div class="grid gap-4 lg:grid-cols-2">
+        <!-- Configuration -->
+        <div class="card">
+            <h2 class="mb-4 text-base font-semibold text-ink">Configuration</h2>
 
-            <MudButton Variant="Variant.Filled"
-                       Color="Color.Primary"
-                       OnClick="SaveConfiguration"
-                       Disabled="isSavingConfig">
+            <label class="label" for="syncInterval">Sync Interval (minutes)</label>
+            <input id="syncInterval" type="number" min="1" max="1440" class="input mb-4"
+                   @bind="syncIntervalMinutes" />
+
+            <button class="btn btn-primary" @onclick="SaveConfiguration" disabled="@isSavingConfig">
                 @if (isSavingConfig)
                 {
-                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                    <span class="spinner size-4"></span>
                 }
                 Save Configuration
-            </MudButton>
+            </button>
 
             @if (configLastModified.HasValue)
             {
-                <MudText Typo="Typo.caption" Class="mt-2">
+                <p class="mt-2 text-xs text-faint">
                     Last modified: @configLastModified.Value.ToLocalTime().ToString("g")
-                </MudText>
+                </p>
             }
-        </MudPaper>
-    </MudItem>
+        </div>
 
-    <MudItem xs="12" md="6">
-        <MudPaper Class="pa-4">
-            <MudText Typo="Typo.h6" Class="mb-3">Bulk Reindex</MudText>
+        <!-- Bulk Reindex -->
+        <div class="card">
+            <h2 class="mb-4 text-base font-semibold text-ink">Bulk Reindex</h2>
 
-            <MudText Typo="Typo.body2" Class="mb-3">
+            <p class="mb-4 text-sm text-muted">
                 Rebuild the entire search index from the database. This may take several minutes.
-            </MudText>
+            </p>
 
-            <MudButton Variant="Variant.Filled"
-                       Color="Color.Secondary"
-                       OnClick="StartReindex"
-                       Disabled="reindexStatus.IsRunning">
+            <button class="btn btn-primary" @onclick="StartReindex" disabled="@reindexStatus.IsRunning">
                 @if (reindexStatus.IsRunning)
                 {
-                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                    <span class="spinner size-4"></span>
                 }
                 Start Bulk Reindex
-            </MudButton>
+            </button>
 
             @if (reindexStatus.IsRunning)
             {
                 <div class="mt-4">
-                    <MudText Typo="Typo.body2" Class="mb-2">
+                    <p class="mb-2 text-sm text-muted">
                         Progress: @reindexStatus.ProcessedCount / @reindexStatus.TotalCount
                         (@ReindexPercentage.ToString("F1")%)
-                    </MudText>
-                    <MudProgressLinear Color="Color.Primary"
-                                       Value="@ReindexPercentage"
-                                       Size="Size.Large" />
+                    </p>
+                    <div class="h-2 w-full overflow-hidden rounded-full bg-surface-2">
+                        <div class="h-full rounded-full bg-sky-500 transition-all"
+                             style="@($"width:{(int)ReindexPercentage}%")"></div>
+                    </div>
                 </div>
             }
 
             @if (!string.IsNullOrEmpty(reindexStatus.ErrorMessage))
             {
-                <MudAlert Severity="Severity.Error" Class="mt-3">@reindexStatus.ErrorMessage</MudAlert>
+                <div class="alert alert-danger mt-3 items-center">
+                    <Icon Name="error" Class="size-5 shrink-0 text-rose-500" />
+                    @reindexStatus.ErrorMessage
+                </div>
             }
             else if (reindexStatus.CompletedAt.HasValue)
             {
-                <MudAlert Severity="Severity.Success" Class="mt-3">
+                <div class="alert alert-success mt-3 items-center">
+                    <Icon Name="success" Class="size-5 shrink-0 text-emerald-500" />
                     Reindex completed at @reindexStatus.CompletedAt.Value.ToLocalTime().ToString("g")
-                </MudAlert>
+                </div>
             }
-        </MudPaper>
-    </MudItem>
+        </div>
+    </div>
 
-    <MudItem xs="12">
-        <MudPaper Class="pa-4">
-            <MudText Typo="Typo.h6" Class="mb-3">Queue Status</MudText>
+    <!-- Queue Status -->
+    <div class="card mt-4">
+        <h2 class="mb-4 text-base font-semibold text-ink">Queue Status</h2>
 
-            <MudStack Row="true" Spacing="4" Class="mb-3">
-                <MudChip T="string" Color="Color.Info">
-                    Pending Operations: @pendingCount
-                </MudChip>
-                <MudChip T="string" Color="Color.Error">
-                    Retrying Operations: @retryingCount
-                </MudChip>
-            </MudStack>
+        <div class="mb-4 flex flex-wrap gap-2">
+            <span class="badge badge-info">Pending Operations: @pendingCount</span>
+            <span class="badge badge-danger">Retrying Operations: @retryingCount</span>
+        </div>
 
-            @if (recentErrors.Any())
-            {
-                <MudText Typo="Typo.subtitle2" Class="mb-2">Recent Errors:</MudText>
-                <MudTable Items="@recentErrors" Dense="true" Hover="true">
-                    <HeaderContent>
-                        <MudTh>Video ID</MudTh>
-                        <MudTh>Operation</MudTh>
-                        <MudTh>Retry Count</MudTh>
-                        <MudTh>Last Attempt</MudTh>
-                        <MudTh>Error</MudTh>
-                    </HeaderContent>
-                    <RowTemplate>
-                        <MudTd>@context.VideoId</MudTd>
-                        <MudTd>@context.OperationType</MudTd>
-                        <MudTd>@context.RetryCount</MudTd>
-                        <MudTd>@context.LastAttempt?.ToLocalTime().ToString("g")</MudTd>
-                        <MudTd>
-                            <MudText Typo="Typo.caption">
-                                @(context.ErrorMessage?.Length > 50
-                                    ? context.ErrorMessage.Substring(0, 50) + "..."
-                                    : context.ErrorMessage)
-                            </MudText>
-                        </MudTd>
-                    </RowTemplate>
-                </MudTable>
-            }
-        </MudPaper>
-    </MudItem>
-</MudGrid>
-</MudTabPanel>
+        @if (recentErrors.Any())
+        {
+            <h3 class="mb-2 text-sm font-semibold text-muted">Recent Errors:</h3>
+            <div class="overflow-x-auto rounded-lg border border-line">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-surface-2 text-xs uppercase tracking-wide text-muted">
+                        <tr>
+                            <th class="px-3 py-2 font-medium">Video ID</th>
+                            <th class="px-3 py-2 font-medium">Operation</th>
+                            <th class="px-3 py-2 font-medium">Retry Count</th>
+                            <th class="px-3 py-2 font-medium">Last Attempt</th>
+                            <th class="px-3 py-2 font-medium">Error</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-line">
+                        @foreach (var error in recentErrors)
+                        {
+                            <tr class="hover:bg-surface-2">
+                                <td class="px-3 py-2 text-ink">@error.VideoId</td>
+                                <td class="px-3 py-2 text-ink">@error.OperationType</td>
+                                <td class="px-3 py-2 text-ink">@error.RetryCount</td>
+                                <td class="whitespace-nowrap px-3 py-2 text-muted">@error.LastAttempt?.ToLocalTime().ToString("g")</td>
+                                <td class="px-3 py-2 text-muted">
+                                    @(error.ErrorMessage?.Length > 50
+                                        ? error.ErrorMessage.Substring(0, 50) + "..."
+                                        : error.ErrorMessage)
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <!-- Local Import -->
+    <div class="card">
+        <div class="mb-4 flex flex-wrap items-center gap-2">
+            <h2 class="flex-1 text-base font-semibold text-ink">Import Log</h2>
+            <span class="badge badge-success">Success: @localImportSuccessCount</span>
+            <span class="badge badge-danger">Failed: @localImportFailedCount</span>
+            <button class="btn btn-ghost" @onclick="LoadLocalImportLog">
+                <Icon Name="refresh" Class="size-4" /> Refresh
+            </button>
+        </div>
 
-<MudTabPanel Text="Local Import">
-    <MudGrid>
-        <MudItem xs="12">
-            <MudPaper Class="pa-4">
-                <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
-                    <MudText Typo="Typo.h6" Style="flex:1">Import Log</MudText>
-                    <MudChip T="string" Color="Color.Success" Size="Size.Small">
-                        Success: @localImportSuccessCount
-                    </MudChip>
-                    <MudChip T="string" Color="Color.Error" Size="Size.Small">
-                        Failed: @localImportFailedCount
-                    </MudChip>
-                    <MudButton Variant="Variant.Text"
-                               StartIcon="@Icons.Material.Filled.Refresh"
-                               OnClick="LoadLocalImportLog">
-                        Refresh
-                    </MudButton>
-                </MudStack>
-
-                @if (localImportLogs.Count == 0)
-                {
-                    <MudText Typo="Typo.body2" Color="Color.Secondary">
-                        No imports recorded yet. Drop video files into the drop folder to get started.
-                    </MudText>
-                }
-                else
-                {
-                    <MudTable Items="@localImportLogs" Dense="true" Hover="true" SortLabel="Sort By">
-                        <HeaderContent>
-                            <MudTh><MudTableSortLabel SortBy="new Func<LocalImportLog, object>(x => x.ImportedAt)">Imported At</MudTableSortLabel></MudTh>
-                            <MudTh><MudTableSortLabel SortBy="new Func<LocalImportLog, object>(x => x.FileName)">File Name</MudTableSortLabel></MudTh>
-                            <MudTh>Status</MudTh>
-                            <MudTh>Video ID</MudTh>
-                            <MudTh><MudTableSortLabel SortBy="new Func<LocalImportLog, object?>(x => x.DateCreatedUsed)">Date Created Used</MudTableSortLabel></MudTh>
-                            <MudTh>Error</MudTh>
-                        </HeaderContent>
-                        <RowTemplate>
-                            <MudTd>@context.ImportedAt.ToLocalTime().ToString("g")</MudTd>
-                            <MudTd>
-                                <MudText Typo="Typo.body2" Style="word-break:break-all">@context.FileName</MudText>
-                            </MudTd>
-                            <MudTd>
-                                @if (context.Status == LocalImportStatus.Success)
-                                {
-                                    <MudChip T="string" Color="Color.Success" Size="Size.Small">Success</MudChip>
-                                }
-                                else
-                                {
-                                    <MudChip T="string" Color="Color.Error" Size="Size.Small">Failed</MudChip>
-                                }
-                            </MudTd>
-                            <MudTd>
-                                <MudText Typo="Typo.caption">@(context.VideoId ?? "—")</MudText>
-                            </MudTd>
-                            <MudTd>
-                                @if (context.DateCreatedUsed.HasValue)
-                                {
-                                    @if (context.DateCreatedUsed.Value.Year == 1970)
+        @if (localImportLogs.Count == 0)
+        {
+            <p class="text-sm text-faint">
+                No imports recorded yet. Drop video files into the drop folder to get started.
+            </p>
+        }
+        else
+        {
+            <div class="overflow-x-auto rounded-lg border border-line">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-surface-2 text-xs uppercase tracking-wide text-muted">
+                        <tr>
+                            <th class="px-3 py-2 font-medium">Imported At</th>
+                            <th class="px-3 py-2 font-medium">File Name</th>
+                            <th class="px-3 py-2 font-medium">Status</th>
+                            <th class="px-3 py-2 font-medium">Video ID</th>
+                            <th class="px-3 py-2 font-medium">Date Created Used</th>
+                            <th class="px-3 py-2 font-medium">Error</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-line">
+                        @foreach (var log in PagedImportLogs)
+                        {
+                            <tr class="hover:bg-surface-2 align-top">
+                                <td class="whitespace-nowrap px-3 py-2 text-ink">@log.ImportedAt.ToLocalTime().ToString("g")</td>
+                                <td class="px-3 py-2"><span class="break-all text-ink">@log.FileName</span></td>
+                                <td class="px-3 py-2">
+                                    @if (log.Status == LocalImportStatus.Success)
                                     {
-                                        <MudStack Spacing="0">
-                                            <MudText Typo="Typo.body2" Color="Color.Warning">
-                                                <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" Class="mr-1" />
-                                                @context.DateCreatedUsed.Value.ToLocalTime().ToString("g")
-                                            </MudText>
-                                            <MudText Typo="Typo.caption" Color="Color.Warning">Fallback — file date unavailable</MudText>
-                                        </MudStack>
+                                        <span class="badge badge-success">Success</span>
                                     }
                                     else
                                     {
-                                        <MudText Typo="Typo.body2">@context.DateCreatedUsed.Value.ToLocalTime().ToString("g")</MudText>
+                                        <span class="badge badge-danger">Failed</span>
                                     }
-                                }
-                                else
-                                {
-                                    <MudText Typo="Typo.body2">—</MudText>
-                                }
-                            </MudTd>
-                            <MudTd>
-                                @if (!string.IsNullOrEmpty(context.ErrorMessage))
-                                {
-                                    <MudButton Size="Size.Small"
-                                               Variant="Variant.Text"
-                                               Color="Color.Error"
-                                               StartIcon="@Icons.Material.Filled.ErrorOutline"
-                                               OnClick="() => ShowError(context.FileName, context.ErrorMessage!)">
-                                        View Error
-                                    </MudButton>
-                                }
-                                else
-                                {
-                                    <MudText Typo="Typo.body2">—</MudText>
-                                }
-                            </MudTd>
-                        </RowTemplate>
-                        <PagerContent>
-                            <MudTablePager />
-                        </PagerContent>
-                    </MudTable>
-                }
-            </MudPaper>
-        </MudItem>
-    </MudGrid>
-</MudTabPanel>
-</MudTabs>
+                                </td>
+                                <td class="px-3 py-2 text-xs text-muted">@(log.VideoId ?? "—")</td>
+                                <td class="px-3 py-2">
+                                    @if (log.DateCreatedUsed.HasValue)
+                                    {
+                                        @if (log.DateCreatedUsed.Value.Year == 1970)
+                                        {
+                                            <div class="flex flex-col">
+                                                <span class="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                                                    <Icon Name="warning" Class="size-4" />
+                                                    @log.DateCreatedUsed.Value.ToLocalTime().ToString("g")
+                                                </span>
+                                                <span class="text-xs text-amber-600/80 dark:text-amber-400/80">Fallback — file date unavailable</span>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-ink">@log.DateCreatedUsed.Value.ToLocalTime().ToString("g")</span>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <span class="text-faint">—</span>
+                                    }
+                                </td>
+                                <td class="px-3 py-2">
+                                    @if (!string.IsNullOrEmpty(log.ErrorMessage))
+                                    {
+                                        <button class="inline-flex cursor-pointer items-center gap-1 text-sm text-rose-600 hover:text-rose-500 dark:text-rose-400 dark:hover:text-rose-300"
+                                                @onclick="@(() => ShowError(log.FileName, log.ErrorMessage!))">
+                                            <Icon Name="error" Class="size-4" /> View Error
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-faint">—</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (ImportTotalPages > 1)
+            {
+                <div class="mt-3 flex items-center justify-end gap-2 text-sm text-muted">
+                    <button class="icon-btn size-8" disabled="@(importPage == 1)" @onclick="@(() => importPage--)" title="Previous page">
+                        <Icon Name="chevron-left" Class="size-4" />
+                    </button>
+                    <span>Page @importPage of @ImportTotalPages</span>
+                    <button class="icon-btn size-8" disabled="@(importPage == ImportTotalPages)" @onclick="@(() => importPage++)" title="Next page">
+                        <Icon Name="chevron-right" Class="size-4" />
+                    </button>
+                </div>
+            }
+        }
+    </div>
+}
+
+@if (showErrorDialog)
+{
+    <ImportErrorDialog Title="@errorDialogTitle"
+                       ErrorMessage="@errorDialogMessage"
+                       OnClose="@(() => showErrorDialog = false)" />
+}
 
 @code {
+    private int activeTab = 0;
+
     private int syncIntervalMinutes = 30;
     private DateTime? configLastModified;
     private bool isSavingConfig = false;
@@ -256,10 +267,26 @@
     private List<LocalImportLog> localImportLogs = new();
     private int localImportSuccessCount = 0;
     private int localImportFailedCount = 0;
+    private int importPage = 1;
+    private const int importPageSize = 25;
+
+    // Error dialog state (replaces MudBlazor's IDialogService)
+    private bool showErrorDialog = false;
+    private string errorDialogTitle = string.Empty;
+    private string errorDialogMessage = string.Empty;
 
     private double ReindexPercentage => reindexStatus.TotalCount > 0
         ? reindexStatus.ProcessedCount * 100.0 / reindexStatus.TotalCount
         : 0;
+
+    private int ImportTotalPages => (int)Math.Ceiling(localImportLogs.Count / (double)importPageSize);
+
+    private IEnumerable<LocalImportLog> PagedImportLogs =>
+        localImportLogs.Skip((importPage - 1) * importPageSize).Take(importPageSize);
+
+    private string TabClass(int index) => index == activeTab
+        ? "cursor-pointer border-b-2 border-sky-500 px-4 py-2 text-sm font-medium text-ink"
+        : "cursor-pointer border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted hover:text-ink";
 
     protected override async Task OnInitializedAsync()
     {
@@ -287,7 +314,7 @@
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Error loading configuration: {ex.Message}", Severity.Error);
+            Toast.Show($"Error loading configuration: {ex.Message}", ToastSeverity.Error);
         }
     }
 
@@ -311,12 +338,12 @@
             }
 
             await DbContext.SaveChangesAsync();
-            Snackbar.Add("Configuration saved successfully", Severity.Success);
+            Toast.Show("Configuration saved successfully", ToastSeverity.Success);
             await LoadConfiguration();
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Error saving configuration: {ex.Message}", Severity.Error);
+            Toast.Show($"Error saving configuration: {ex.Message}", ToastSeverity.Error);
         }
         finally
         {
@@ -328,7 +355,7 @@
     {
         if (!ReindexCoordinator.TryStart())
         {
-            Snackbar.Add("A reindex is already running", Severity.Warning);
+            Toast.Show("A reindex is already running", ToastSeverity.Warning);
         }
 
         reindexStatus = ReindexCoordinator.Status;
@@ -357,11 +384,11 @@
 
             if (string.IsNullOrEmpty(reindexStatus.ErrorMessage))
             {
-                Snackbar.Add("Reindex completed successfully", Severity.Success);
+                Toast.Show("Reindex completed successfully", ToastSeverity.Success);
             }
             else
             {
-                Snackbar.Add($"Reindex failed: {reindexStatus.ErrorMessage}", Severity.Error);
+                Toast.Show($"Reindex failed: {reindexStatus.ErrorMessage}", ToastSeverity.Error);
             }
 
             await LoadQueueStatus();
@@ -392,7 +419,7 @@
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Error loading queue status: {ex.Message}", Severity.Error);
+            Toast.Show($"Error loading queue status: {ex.Message}", ToastSeverity.Error);
         }
     }
 
@@ -406,22 +433,19 @@
                 .ToListAsync();
             localImportSuccessCount = localImportLogs.Count(l => l.Status == LocalImportStatus.Success);
             localImportFailedCount  = localImportLogs.Count(l => l.Status == LocalImportStatus.Failed);
+            importPage = 1;
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Error loading import log: {ex.Message}", Severity.Error);
+            Toast.Show($"Error loading import log: {ex.Message}", ToastSeverity.Error);
         }
     }
 
-    private async Task ShowError(string fileName, string errorMessage)
+    private void ShowError(string fileName, string errorMessage)
     {
-        var parameters = new DialogParameters
-        {
-            ["Title"]        = $"Import Error — {fileName}",
-            ["ErrorMessage"] = errorMessage
-        };
-        var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true };
-        await DialogService.ShowAsync<TikTokArchive.Web.Components.Components.ImportErrorDialog>("Import Error", parameters, options);
+        errorDialogTitle = $"Import Error — {fileName}";
+        errorDialogMessage = errorMessage;
+        showErrorDialog = true;
     }
 
     public void Dispose()
