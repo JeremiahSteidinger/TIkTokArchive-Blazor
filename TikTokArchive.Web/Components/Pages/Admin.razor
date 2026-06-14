@@ -4,6 +4,7 @@
 @using TikTokArchive.Web.Services
 @inject TikTokArchiveDbContext DbContext
 @inject ReindexCoordinator ReindexCoordinator
+@inject ITranscriptionService TranscriptionSvc
 @inject ToastService Toast
 @implements IDisposable
 
@@ -14,6 +15,7 @@
 <div class="mb-5 flex gap-1 border-b border-line">
     <button class="@TabClass(0)" @onclick="@(() => activeTab = 0)">Search Index</button>
     <button class="@TabClass(1)" @onclick="@(() => activeTab = 1)">Local Import</button>
+    <button class="@TabClass(2)" @onclick="@(() => activeTab = 2)">Transcription</button>
 </div>
 
 @if (activeTab == 0)
@@ -134,7 +136,7 @@
         }
     </div>
 }
-else
+else if (activeTab == 1)
 {
     <!-- Local Import -->
     <div class="card">
@@ -242,6 +244,155 @@ else
     </div>
 }
 
+else if (activeTab == 2)
+{
+    <!-- Transcription -->
+    <div class="card">
+        <div class="mb-4 flex flex-wrap items-center gap-2">
+            <h2 class="flex-1 text-base font-semibold text-ink">Transcription Queue</h2>
+            <button class="btn btn-ghost" @onclick="LoadTranscriptionData">
+                <Icon Name="refresh" Class="size-4" /> Refresh
+            </button>
+        </div>
+
+        <div class="mb-4 flex flex-wrap gap-2">
+            <span class="badge badge-info">Pending: @TranscriptCount(TranscriptStatus.Pending)</span>
+            <span class="badge badge-success">Completed: @TranscriptCount(TranscriptStatus.Completed)</span>
+            <span class="badge badge-danger">Failed: @TranscriptCount(TranscriptStatus.Failed)</span>
+            <span class="badge bg-surface-2 text-muted">Skipped: @TranscriptCount(TranscriptStatus.Skipped)</span>
+            <span class="badge bg-surface-2 text-muted">Not requested: @TranscriptCount(TranscriptStatus.NotRequested)</span>
+        </div>
+
+        <div class="mb-5 flex flex-wrap gap-2">
+            <button class="btn btn-primary" @onclick="RetryFailedTranscriptions"
+                    disabled="@(TranscriptCount(TranscriptStatus.Failed) == 0)">
+                <Icon Name="refresh" Class="size-4" /> Retry failed (@TranscriptCount(TranscriptStatus.Failed))
+            </button>
+            <button class="btn btn-ghost" @onclick="BackfillTranscriptions"
+                    disabled="@(TranscriptCount(TranscriptStatus.NotRequested) == 0)">
+                <Icon Name="microphone" Class="size-4" /> Transcribe back-catalog (@TranscriptCount(TranscriptStatus.NotRequested))
+            </button>
+        </div>
+
+        <div class="mb-3 flex flex-wrap items-center gap-2">
+            <span class="text-xs text-faint">Show:</span>
+            @foreach (var filter in transcriptFilters)
+            {
+                var active = transcriptFilter == filter.Key;
+                <button class="@($"chip {(active ? "chip-active" : "chip-inactive")}")"
+                        @onclick="@(() => SetTranscriptFilter(filter.Key))">
+                    @filter.Label
+                </button>
+            }
+        </div>
+
+        @if (transcriptVideos.Count == 0)
+        {
+            <p class="text-sm text-faint">No videos in this view.</p>
+        }
+        else
+        {
+            <div class="overflow-x-auto rounded-lg border border-line">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-surface-2 text-xs uppercase tracking-wide text-muted">
+                        <tr>
+                            <th class="px-3 py-2 font-medium">Video</th>
+                            <th class="px-3 py-2 font-medium">Status</th>
+                            <th class="px-3 py-2 font-medium">Confidence</th>
+                            <th class="px-3 py-2 font-medium">Retries</th>
+                            <th class="px-3 py-2 font-medium">Last Attempt</th>
+                            <th class="px-3 py-2 font-medium">Error</th>
+                            <th class="px-3 py-2 text-right font-medium">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-line">
+                        @foreach (var row in PagedTranscriptRows)
+                        {
+                            <tr class="align-top hover:bg-surface-2">
+                                <td class="px-3 py-2">
+                                    <div class="font-medium text-ink">@(string.IsNullOrWhiteSpace(row.Creator) ? "—" : row.Creator)</div>
+                                    <div class="line-clamp-1 max-w-xs text-xs text-muted">@row.Description</div>
+                                    <div class="text-[11px] text-faint">@row.VideoId</div>
+                                </td>
+                                <td class="px-3 py-2">
+                                    @{
+                                        var badge = TranscriptBadge(row.Status);
+                                    }
+                                    <span class="badge @badge.Class">@badge.Label</span>
+                                </td>
+                                <td class="px-3 py-2">
+                                    @if (row.Confidence.HasValue)
+                                    {
+                                        if (row.Confidence.Value < TranscriptionSvc.LowConfidenceThreshold)
+                                        {
+                                            <span class="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400" title="Low confidence">
+                                                <Icon Name="warning" Class="size-4" /> @row.Confidence.Value.ToString("P0")
+                                            </span>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-muted">@row.Confidence.Value.ToString("P0")</span>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <span class="text-faint">—</span>
+                                    }
+                                </td>
+                                <td class="px-3 py-2 text-ink">@row.RetryCount</td>
+                                <td class="whitespace-nowrap px-3 py-2 text-muted">@(row.LastAttempt?.ToLocalTime().ToString("g") ?? "—")</td>
+                                <td class="px-3 py-2">
+                                    @if (!string.IsNullOrEmpty(row.Error))
+                                    {
+                                        <button class="inline-flex cursor-pointer items-center gap-1 text-sm text-rose-600 hover:text-rose-500 dark:text-rose-400 dark:hover:text-rose-300"
+                                                @onclick="@(() => ShowTranscriptError(row.VideoId, row.Error!))">
+                                            <Icon Name="error" Class="size-4" /> View
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-faint">—</span>
+                                    }
+                                </td>
+                                <td class="px-3 py-2 text-right">
+                                    <div class="flex items-center justify-end gap-3">
+                                        @if (row.Status == TranscriptStatus.Completed)
+                                        {
+                                            <button class="inline-flex items-center gap-1 text-sm text-rose-600 hover:text-rose-500 dark:text-rose-400 dark:hover:text-rose-300"
+                                                    @onclick="@(() => DeleteTranscript(row.VideoId))" title="Delete transcript">
+                                                <Icon Name="trash" Class="size-4" /> Delete
+                                            </button>
+                                        }
+                                        <button class="inline-flex items-center gap-1 text-sm text-sky-600 hover:text-sky-500 dark:text-sky-400 dark:hover:text-sky-300"
+                                                @onclick="@(() => QueueTranscription(row.VideoId))"
+                                                title="@(row.Status == TranscriptStatus.Completed ? "Re-transcribe" : "Queue transcription")">
+                                            <Icon Name="refresh" Class="size-4" />
+                                            @(row.Status == TranscriptStatus.Completed ? "Re-queue" : "Queue")
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (TranscriptTotalPages > 1)
+            {
+                <div class="mt-3 flex items-center justify-end gap-2 text-sm text-muted">
+                    <button class="icon-btn size-8" disabled="@(transcriptPage == 1)" @onclick="@(() => transcriptPage--)" title="Previous page">
+                        <Icon Name="chevron-left" Class="size-4" />
+                    </button>
+                    <span>Page @transcriptPage of @TranscriptTotalPages</span>
+                    <button class="icon-btn size-8" disabled="@(transcriptPage == TranscriptTotalPages)" @onclick="@(() => transcriptPage++)" title="Next page">
+                        <Icon Name="chevron-right" Class="size-4" />
+                    </button>
+                </div>
+            }
+        }
+    </div>
+}
+
 @if (showErrorDialog)
 {
     <ImportErrorDialog Title="@errorDialogTitle"
@@ -270,10 +421,45 @@ else
     private int importPage = 1;
     private const int importPageSize = 25;
 
+    // Transcription
+    private static readonly (string Key, string Label)[] transcriptFilters =
+    {
+        ("queue", "Queue"),                 // active queue: Pending + Failed
+        ("pending", "Pending"),
+        ("failed", "Failed"),
+        ("completed", "Completed"),
+        ("lowconf", "Low confidence"),
+        ("skipped", "Skipped"),
+        ("notrequested", "Not requested"),
+    };
+    private Dictionary<TranscriptStatus, int> transcriptCounts = new();
+    private string transcriptFilter = "queue";
+    private List<TranscriptRow> transcriptVideos = new();
+    private int transcriptPage = 1;
+    private const int transcriptPageSize = 25;
+
     // Error dialog state (replaces MudBlazor's IDialogService)
     private bool showErrorDialog = false;
     private string errorDialogTitle = string.Empty;
     private string errorDialogMessage = string.Empty;
+
+    private int TranscriptCount(TranscriptStatus status) =>
+        transcriptCounts.TryGetValue(status, out var c) ? c : 0;
+
+    private int TranscriptTotalPages => (int)Math.Ceiling(transcriptVideos.Count / (double)transcriptPageSize);
+
+    private IEnumerable<TranscriptRow> PagedTranscriptRows =>
+        transcriptVideos.Skip((transcriptPage - 1) * transcriptPageSize).Take(transcriptPageSize);
+
+    private static (string Class, string Label) TranscriptBadge(TranscriptStatus status) => status switch
+    {
+        TranscriptStatus.Pending => ("badge-info", "Pending"),
+        TranscriptStatus.Completed => ("badge-success", "Completed"),
+        TranscriptStatus.Failed => ("badge-danger", "Failed"),
+        TranscriptStatus.Skipped => ("bg-surface-2 text-muted", "Skipped"),
+        TranscriptStatus.NotRequested => ("bg-surface-2 text-muted", "Not requested"),
+        _ => ("bg-surface-2 text-muted", status.ToString())
+    };
 
     private double ReindexPercentage => reindexStatus.TotalCount > 0
         ? reindexStatus.ProcessedCount * 100.0 / reindexStatus.TotalCount
@@ -299,6 +485,7 @@ else
         await LoadConfiguration();
         await LoadQueueStatus();
         await LoadLocalImportLog();
+        await LoadTranscriptionData();
     }
 
     private async Task LoadConfiguration()
@@ -448,6 +635,119 @@ else
         showErrorDialog = true;
     }
 
+    private async Task LoadTranscriptionData()
+    {
+        try
+        {
+            transcriptCounts = await TranscriptionSvc.GetStatusCountsAsync();
+
+            var threshold = TranscriptionSvc.LowConfidenceThreshold;
+            var query = transcriptFilter switch
+            {
+                "pending" => DbContext.Videos.Where(v => v.TranscriptStatus == TranscriptStatus.Pending),
+                "failed" => DbContext.Videos.Where(v => v.TranscriptStatus == TranscriptStatus.Failed),
+                "completed" => DbContext.Videos.Where(v => v.TranscriptStatus == TranscriptStatus.Completed),
+                "lowconf" => DbContext.Videos.Where(v => v.TranscriptStatus == TranscriptStatus.Completed
+                                                      && v.TranscriptConfidence != null
+                                                      && v.TranscriptConfidence < threshold),
+                "skipped" => DbContext.Videos.Where(v => v.TranscriptStatus == TranscriptStatus.Skipped),
+                "notrequested" => DbContext.Videos.Where(v => v.TranscriptStatus == TranscriptStatus.NotRequested),
+                _ => DbContext.Videos.Where(v => v.TranscriptStatus == TranscriptStatus.Pending
+                                              || v.TranscriptStatus == TranscriptStatus.Failed),
+            };
+
+            transcriptVideos = await query
+                .OrderByDescending(v => v.AddedToApp)
+                .Take(200)
+                .Select(v => new TranscriptRow
+                {
+                    VideoId = v.TikTokVideoId,
+                    Creator = v.Creator.DisplayName,
+                    Description = v.Description,
+                    Status = v.TranscriptStatus,
+                    Confidence = v.TranscriptConfidence,
+                    RetryCount = v.TranscriptRetryCount,
+                    LastAttempt = v.TranscriptLastAttempt,
+                    Error = v.TranscriptErrorMessage
+                })
+                .ToListAsync();
+            transcriptPage = 1;
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error loading transcription queue: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private async Task SetTranscriptFilter(string key)
+    {
+        transcriptFilter = key;
+        await LoadTranscriptionData();
+    }
+
+    private async Task QueueTranscription(string videoId)
+    {
+        try
+        {
+            await TranscriptionSvc.QueueAsync(videoId);
+            Toast.Show("Queued for transcription", ToastSeverity.Success);
+            await LoadTranscriptionData();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error queueing transcription: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private async Task DeleteTranscript(string videoId)
+    {
+        try
+        {
+            await TranscriptionSvc.DeleteTranscriptAsync(videoId);
+            Toast.Show("Transcript deleted", ToastSeverity.Success);
+            await LoadTranscriptionData();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error deleting transcript: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private async Task RetryFailedTranscriptions()
+    {
+        try
+        {
+            var count = await TranscriptionSvc.RetryFailedAsync();
+            Toast.Show($"Requeued {count} failed transcription(s)", ToastSeverity.Success);
+            await LoadTranscriptionData();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error retrying transcriptions: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private async Task BackfillTranscriptions()
+    {
+        try
+        {
+            var count = await TranscriptionSvc.BackfillAsync();
+            Toast.Show($"Queued {count} video(s) for transcription", ToastSeverity.Success);
+            await LoadTranscriptionData();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error queueing back-catalog: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private void ShowTranscriptError(string videoId, string error)
+    {
+        errorDialogTitle = $"Transcription Error — {videoId}";
+        errorDialogMessage = error;
+        showErrorDialog = true;
+    }
+
     public void Dispose()
     {
         reindexPollTimer?.Dispose();
@@ -460,5 +760,17 @@ else
         public int RetryCount { get; set; }
         public DateTime? LastAttempt { get; set; }
         public string? ErrorMessage { get; set; }
+    }
+
+    private class TranscriptRow
+    {
+        public string VideoId { get; set; } = string.Empty;
+        public string Creator { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public TranscriptStatus Status { get; set; }
+        public double? Confidence { get; set; }
+        public int RetryCount { get; set; }
+        public DateTime? LastAttempt { get; set; }
+        public string? Error { get; set; }
     }
 }

@@ -8,6 +8,8 @@ services:
       - "${APP_PORT:-8080}:8080"
     environment:
       - OpenSearch:Url=http://opensearch:9200
+      - SpeechToText:Enabled=true
+      - SpeechToText:Url=http://whisper-asr:9000
     volumes:
       - ./media:/media
       # Drop video files here and the local import service will ingest them.
@@ -15,6 +17,8 @@ services:
     depends_on:
       opensearch:
         condition: service_healthy
+      # No health condition on whisper-asr: the transcription worker's backoff absorbs the
+      # first-run model download, so app startup never blocks on the ASR container.
 
   opensearch:
     image: opensearchproject/opensearch:2
@@ -33,5 +37,24 @@ services:
       retries: 30
       start_period: 30s
 
+  # Speech-to-text engine. Bundles ffmpeg, so the app POSTs the raw video file and the
+  # service extracts/decodes the audio itself. CPU-only with the faster_whisper engine.
+  whisper-asr:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    environment:
+      - ASR_ENGINE=faster_whisper
+      - ASR_MODEL=base                # tiny/small/medium also valid; base is a good CPU default
+      - ASR_MODEL_PATH=/data/whisper
+      # - ASR_DEVICE=cuda             # uncomment (and add a GPU reservation) to use an NVIDIA GPU
+    volumes:
+      - whisper_cache:/data/whisper   # persist the downloaded model across restarts
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:9000/docs')\" || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s              # first start downloads the model (~150MB for base)
+
 volumes:
   opensearch_data:
+  whisper_cache:

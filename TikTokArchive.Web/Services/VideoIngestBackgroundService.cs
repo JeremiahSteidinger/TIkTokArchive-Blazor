@@ -18,6 +18,7 @@ namespace TikTokArchive.Web.Services
         private readonly VideoIngestQueue _queue;
         private readonly IServiceProvider _serviceProvider;
         private readonly SearchIndexSignal _searchSignal;
+        private readonly TranscriptionSignal _transcriptionSignal;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly MediaStorageOptions _mediaOptions;
         private readonly ILogger<VideoIngestBackgroundService> _logger;
@@ -26,6 +27,7 @@ namespace TikTokArchive.Web.Services
             VideoIngestQueue queue,
             IServiceProvider serviceProvider,
             SearchIndexSignal searchSignal,
+            TranscriptionSignal transcriptionSignal,
             IHttpClientFactory httpClientFactory,
             IOptions<MediaStorageOptions> mediaOptions,
             ILogger<VideoIngestBackgroundService> logger)
@@ -33,6 +35,7 @@ namespace TikTokArchive.Web.Services
             _queue = queue;
             _serviceProvider = serviceProvider;
             _searchSignal = searchSignal;
+            _transcriptionSignal = transcriptionSignal;
             _httpClientFactory = httpClientFactory;
             _mediaOptions = mediaOptions.Value;
             _logger = logger;
@@ -109,6 +112,7 @@ namespace TikTokArchive.Web.Services
                 job.Status = IngestJobStatus.Saving;
                 await SaveVideoAsync(dbContext, metadata, cancellationToken);
                 _searchSignal.Notify();
+                _transcriptionSignal.Notify();
 
                 job.MarkCompleted();
                 _logger.LogInformation("Video {VideoId} added successfully", metadata.VideoId);

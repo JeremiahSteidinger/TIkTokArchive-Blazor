@@ -18,6 +18,7 @@ namespace TikTokArchive.Web.Services
 
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly SearchIndexSignal _searchSignal;
+        private readonly TranscriptionSignal _transcriptionSignal;
         private readonly ILogger<LocalImportBackgroundService> _logger;
         private readonly string _importPath;
         private readonly string _videosPath;
@@ -26,12 +27,14 @@ namespace TikTokArchive.Web.Services
         public LocalImportBackgroundService(
             IServiceScopeFactory scopeFactory,
             SearchIndexSignal searchSignal,
+            TranscriptionSignal transcriptionSignal,
             IOptions<MediaStorageOptions> mediaOptions,
             ILogger<LocalImportBackgroundService> logger,
             IConfiguration configuration)
         {
             _scopeFactory = scopeFactory;
             _searchSignal = searchSignal;
+            _transcriptionSignal = transcriptionSignal;
             _logger = logger;
             _importPath = configuration["LocalImport:ImportPath"] ?? "/dropfolder";
             _videosPath = mediaOptions.Value.VideosPath;
@@ -141,6 +144,7 @@ namespace TikTokArchive.Web.Services
 
                 await db.SaveChangesAsync(cancellationToken);
                 _searchSignal.Notify();
+                _transcriptionSignal.Notify();
 
                 _logger.LogInformation("Imported local video {VideoId} from {FileName}", videoId, fileName);
             }

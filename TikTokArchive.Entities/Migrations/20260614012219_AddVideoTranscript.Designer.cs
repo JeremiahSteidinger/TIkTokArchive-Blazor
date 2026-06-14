@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TikTokArchive.Entities;
 
@@ -11,9 +12,11 @@ using TikTokArchive.Entities;
 namespace TikTokArchive.Entities.Migrations
 {
     [DbContext(typeof(TikTokArchiveDbContext))]
-    partial class TikTokArchiveDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260614012219_AddVideoTranscript")]
+    partial class AddVideoTranscript
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -185,9 +188,6 @@ namespace TikTokArchive.Entities.Migrations
 
                     b.Property<string>("Transcript")
                         .HasColumnType("LONGTEXT");
-
-                    b.Property<double?>("TranscriptConfidence")
-                        .HasColumnType("double");
 
                     b.Property<string>("TranscriptErrorMessage")
                         .HasColumnType("longtext");

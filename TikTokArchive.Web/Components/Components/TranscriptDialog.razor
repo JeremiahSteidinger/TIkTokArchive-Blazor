@@ -1,0 +1,64 @@
+@* Modal overlay showing a video's speech-to-text transcript. Mirrors ImportErrorDialog. *@
+<div class="fixed inset-0 z-[1050] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" @onclick="OnCloseRequested"></div>
+    <div class="relative z-10 flex max-h-[80vh] w-full max-w-3xl flex-col rounded-xl border border-line bg-surface shadow-2xl">
+        <div class="flex items-center gap-2 border-b border-line px-5 py-3">
+            <Icon Name="document-text" Class="size-5 shrink-0 text-emerald-500" />
+            <h2 class="flex-1 truncate text-base font-semibold text-ink">@Title</h2>
+            <button class="icon-btn size-8" @onclick="OnCloseRequested" aria-label="Close">
+                <Icon Name="close" Class="size-4" />
+            </button>
+        </div>
+        @if (Confidence.HasValue)
+        {
+            <div class="border-b border-line px-5 py-2">
+                @if (IsLowConfidence)
+                {
+                    <span class="inline-flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400">
+                        <Icon Name="warning" Class="size-4" /> Low confidence: @Confidence.Value.ToString("P0")
+                    </span>
+                }
+                else
+                {
+                    <span class="text-sm text-muted">Confidence: @Confidence.Value.ToString("P0")</span>
+                }
+            </div>
+        }
+        <div class="overflow-y-auto p-4">
+            @if (string.IsNullOrWhiteSpace(Transcript))
+            {
+                <p class="text-sm text-faint">No transcript text.</p>
+            }
+            else
+            {
+                <p class="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink">@Transcript</p>
+            }
+        </div>
+        <div class="flex items-center justify-between border-t border-line px-5 py-3">
+            @if (OnDelete.HasDelegate)
+            {
+                <button class="btn btn-ghost text-rose-600 hover:bg-rose-500/10 dark:text-rose-400"
+                        @onclick="OnDeleteRequested">
+                    <Icon Name="trash" Class="size-4" /> Delete transcript
+                </button>
+            }
+            else
+            {
+                <span></span>
+            }
+            <button class="btn btn-ghost" @onclick="OnCloseRequested">Close</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Transcript";
+    [Parameter] public string? Transcript { get; set; }
+    [Parameter] public double? Confidence { get; set; }
+    [Parameter] public bool IsLowConfidence { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnDelete { get; set; }
+
+    private Task OnCloseRequested() => OnClose.InvokeAsync();
+    private Task OnDeleteRequested() => OnDelete.InvokeAsync();
+}

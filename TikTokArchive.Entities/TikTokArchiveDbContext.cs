@@ -47,6 +47,16 @@ namespace TikTokArchive.Entities
                 .Property(v => v.AddedToApp)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP");
 
+            // Transcripts can be long (minutes of speech), so LONGTEXT rather than TEXT.
+            modelBuilder.Entity<Video>()
+                .Property(v => v.Transcript)
+                .HasColumnType("LONGTEXT");
+
+            // Covering index for the transcription worker's claim query
+            // (WHERE TranscriptStatus IN (Pending, Failed) ORDER BY ...).
+            modelBuilder.Entity<Video>()
+                .HasIndex(v => new { v.TranscriptStatus, v.TranscriptLastAttempt });
+
             // SearchIndexOperation - created timestamp default
             modelBuilder.Entity<SearchIndexOperation>()
                 .Property(s => s.CreatedAt)
