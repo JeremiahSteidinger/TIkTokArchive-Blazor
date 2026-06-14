@@ -216,8 +216,9 @@ else if (activeTab == 1)
             <h2 class="flex-1 text-base font-semibold text-ink">Import Log</h2>
             <span class="badge badge-success">Success: @localImportSuccessCount</span>
             <span class="badge badge-danger">Failed: @localImportFailedCount</span>
-            <button class="btn btn-ghost" @onclick="LoadLocalImportLog">
-                <Icon Name="refresh" Class="size-4" /> Refresh
+            <button class="btn btn-ghost" @onclick="RefreshLocalImportLog" disabled="@localImportRefreshing">
+                <Icon Name="refresh" Class="@($"size-4 {(localImportRefreshing ? "animate-spin" : "")}")" />
+                @(localImportRefreshing ? "Refreshing…" : "Refresh")
             </button>
         </div>
 
@@ -322,8 +323,9 @@ else if (activeTab == 2)
     <div class="card">
         <div class="mb-4 flex flex-wrap items-center gap-2">
             <h2 class="flex-1 text-base font-semibold text-ink">Transcription Queue</h2>
-            <button class="btn btn-ghost" @onclick="LoadTranscriptionData">
-                <Icon Name="refresh" Class="size-4" /> Refresh
+            <button class="btn btn-ghost" @onclick="RefreshTranscriptionData" disabled="@transcriptRefreshing">
+                <Icon Name="refresh" Class="@($"size-4 {(transcriptRefreshing ? "animate-spin" : "")}")" />
+                @(transcriptRefreshing ? "Refreshing…" : "Refresh")
             </button>
         </div>
 
@@ -646,6 +648,7 @@ else if (activeTab == 3)
     private int localImportFailedCount = 0;
     private int importPage = 1;
     private const int importPageSize = 25;
+    private bool localImportRefreshing;
 
     // Transcription
     private static readonly (string Key, string Label)[] transcriptFilters =
@@ -663,6 +666,7 @@ else if (activeTab == 3)
     private List<TranscriptRow> transcriptVideos = new();
     private int transcriptPage = 1;
     private const int transcriptPageSize = 25;
+    private bool transcriptRefreshing;
 
     // AI Enrichment
     private static readonly (string Key, string Label)[] aiFilters =
@@ -931,6 +935,28 @@ else if (activeTab == 3)
         }
     }
 
+    // See RefreshAiEnrichmentData: spins the icon for at least a second so the (usually instant)
+    // reload gives visible feedback, then confirms with a toast.
+    private async Task RefreshLocalImportLog()
+    {
+        if (localImportRefreshing)
+        {
+            return;
+        }
+
+        localImportRefreshing = true;
+        try
+        {
+            await Task.WhenAll(LoadLocalImportLog(), Task.Delay(1000));
+        }
+        finally
+        {
+            localImportRefreshing = false;
+        }
+
+        Toast.Show("Import log refreshed", ToastSeverity.Success);
+    }
+
     private void ShowError(string fileName, string errorMessage)
     {
         errorDialogTitle = $"Import Error — {fileName}";
@@ -980,6 +1006,28 @@ else if (activeTab == 3)
         {
             Toast.Show($"Error loading transcription queue: {ex.Message}", ToastSeverity.Error);
         }
+    }
+
+    // See RefreshAiEnrichmentData: spins the icon for at least a second so the (usually instant)
+    // reload gives visible feedback, then confirms with a toast.
+    private async Task RefreshTranscriptionData()
+    {
+        if (transcriptRefreshing)
+        {
+            return;
+        }
+
+        transcriptRefreshing = true;
+        try
+        {
+            await Task.WhenAll(LoadTranscriptionData(), Task.Delay(1000));
+        }
+        finally
+        {
+            transcriptRefreshing = false;
+        }
+
+        Toast.Show("Transcription queue refreshed", ToastSeverity.Success);
     }
 
     private async Task SetTranscriptFilter(string key)

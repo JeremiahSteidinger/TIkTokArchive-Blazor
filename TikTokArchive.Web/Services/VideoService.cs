@@ -8,6 +8,19 @@ namespace TikTokArchive.Web.Services;
 /// <summary>Lightweight transcript + AI-summary status for one video, for live status polling.</summary>
 public record VideoStatus(string VideoId, TranscriptStatus TranscriptStatus, AiSummaryStatus AiSummaryStatus);
 
+/// <summary>
+/// A creator's header info plus one page of their videos (newest first). <c>MatchingCount</c>
+/// counts the currently filtered set (drives paging); <c>TotalCount</c> is the creator's overall
+/// saved-video count (shown in the header, independent of any tag filter).
+/// </summary>
+public record CreatorProfileResult(Creator Creator, List<Video> Videos, int MatchingCount, int TotalCount);
+
+/// <summary>One row in the creators index: identity plus how many videos are saved for them.</summary>
+public record CreatorListItem(int Id, string TikTokId, string DisplayName, int VideoCount);
+
+/// <summary>A page of the creators index plus the total number of creators matching the search.</summary>
+public record CreatorListResult(List<CreatorListItem> Creators, int TotalCount);
+
 public interface IVideoService
 {
     Task<(List<Video> Videos, int TotalCount)> GetVideosAsync(int page = 1, int pageSize = 20, string? tagFilter = null, string? searchQuery = null, List<string>? searchFields = null);
@@ -25,6 +38,18 @@ public interface IVideoService
     /// TikTok tags are left intact (returns false). Re-indexes so the tag drops out of search.
     /// </summary>
     Task<bool> RemoveTagFromVideoAsync(string videoId, int tagId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Load a creator and one page of their videos, newest first, or null if no creator has the
+    /// given id. <paramref name="tagFilter"/> narrows to videos carrying that tag.
+    /// </summary>
+    Task<CreatorProfileResult?> GetCreatorProfileAsync(int creatorId, int page = 1, int pageSize = 20, string? tagFilter = null);
+
+    /// <summary>
+    /// One page of the creators index, ordered by saved-video count (most first). An optional
+    /// <paramref name="search"/> matches the display name or @username.
+    /// </summary>
+    Task<CreatorListResult> GetCreatorsAsync(int page = 1, int pageSize = 30, string? search = null);
 }
 
 public class VideoService : IVideoService
@@ -84,6 +109,66 @@ public class VideoService : IVideoService
             .ToListAsync();
 
         return (videos, totalCount);
+    }
+
+    public async Task<CreatorProfileResult?> GetCreatorProfileAsync(int creatorId, int page = 1, int pageSize = 20, string? tagFilter = null)
+    {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync();
+
+        var creator = await dbContext.Creators.FirstOrDefaultAsync(c => c.Id == creatorId);
+        if (creator == null)
+        {
+            return null;
+        }
+
+        // Overall saved-video count for the header — independent of any tag filter.
+        var totalCount = await dbContext.Videos.CountAsync(v => v.Creator.Id == creatorId);
+
+        var query = dbContext.Videos
+            .Include(v => v.Creator)
+            .Include(v => v.Tags)
+                .ThenInclude(vt => vt.Tag)
+            .Where(v => v.Creator.Id == creatorId);
+
+        if (!string.IsNullOrEmpty(tagFilter))
+        {
+            query = query.Where(v => v.Tags.Any(vt => vt.Tag.Name == tagFilter));
+        }
+
+        var matchingCount = await query.CountAsync();
+        var videos = await query
+            .OrderByDescending(v => v.AddedToApp)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
+
+        return new CreatorProfileResult(creator, videos, matchingCount, totalCount);
+    }
+
+    public async Task<CreatorListResult> GetCreatorsAsync(int page = 1, int pageSize = 30, string? search = null)
+    {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync();
+
+        var query = dbContext.Creators.AsQueryable();
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim();
+            query = query.Where(c => c.DisplayName.Contains(term) || c.TikTokId.Contains(term));
+        }
+
+        var totalCount = await query.CountAsync();
+
+        // Order/page on the entity (EF can't sort by a projected record member), then project the
+        // video count as a correlated subquery so we never load the Videos rows or ProfilePicture blob.
+        var creators = await query
+            .OrderByDescending(c => c.Videos.Count())
+            .ThenBy(c => c.DisplayName)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(c => new CreatorListItem(c.Id, c.TikTokId, c.DisplayName, c.Videos.Count()))
+            .ToListAsync();
+
+        return new CreatorListResult(creators, totalCount);
     }
 
     public async Task<List<VideoStatus>> GetStatusesAsync(IReadOnlyCollection<string> videoIds, CancellationToken ct = default)
