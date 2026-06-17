@@ -1,10 +1,8 @@
 @page "/videos"
 @inject TikTokArchive.Web.Services.IVideoService VideoService
 @inject TikTokArchive.Web.Services.VideoIngestQueue IngestQueue
-@inject TikTokArchive.Web.Services.ITranscriptionService TranscriptionSvc
-@inject TikTokArchive.Web.Services.IAiEnrichmentService AiEnrichmentSvc
-@inject IJSRuntime JSRuntime
 @inject ToastService Toast
+@inject NavigationManager Nav
 @using TikTokArchive.Entities
 @using TikTokArchive.Web.Services
 @implements IDisposable
@@ -131,187 +129,18 @@ else
             <div class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-5">
                 @foreach (var video in videos)
                 {
-                    <div class="flex flex-col overflow-hidden rounded-xl border border-line bg-surface">
-                        <div class="p-3">
-                            @if (!string.IsNullOrWhiteSpace(video.TikTokVideoId))
-                            {
-                                var videoUrl = $"/api/video/{video.TikTokVideoId}/stream";
-                                var posterUrl = $"/api/video/{video.TikTokVideoId}/thumbnail";
-                                <video id="@video.Id"
-                                       controls
-                                       preload="metadata"
-                                       class="w-full rounded-lg bg-black"
-                                       poster="@posterUrl">
-                                    <source src="@videoUrl" type="video/mp4" />
-                                    Your browser does not support the video tag.
-                                </video>
-                            }
-                            <p class="mt-3 text-sm font-semibold text-ink">@video.Creator?.DisplayName</p>
-                            <p class="mt-1 text-sm text-muted">@video.Description</p>
-                            @if (!string.IsNullOrWhiteSpace(video.Summary))
-                            {
-                                <p class="mt-2 flex gap-1.5 text-sm italic text-faint">
-                                    <Icon Name="sparkles" Class="size-4 shrink-0 text-violet-500" />
-                                    <span>@video.Summary</span>
-                                </p>
-                            }
-                            @if (video.Tags.Any())
-                            {
-                                <div class="mt-3 flex flex-wrap gap-1.5">
-                                    @foreach (var tag in video.Tags)
-                                    {
-                                        @if (tag.Source == TagSource.Ai)
-                                        {
-                                            <span class="chip chip-ai" title="AI-generated tag">
-                                                <button class="inline-flex items-center gap-1"
-                                                        @onclick="@(() => FilterByTag(tag.Tag.Name))">
-                                                    <Icon Name="sparkles" Class="size-3" />@tag.Tag.Name
-                                                </button>
-                                                <button class="-mr-1 ml-0.5 rounded-full p-0.5 hover:bg-violet-500/25"
-                                                        @onclick="@(() => RemoveAiTag(video, tag))"
-                                                        title="Remove AI tag" aria-label="Remove AI tag">
-                                                    <Icon Name="close" Class="size-3" />
-                                                </button>
-                                            </span>
-                                        }
-                                        else
-                                        {
-                                            var tagActive = selectedTag == tag.Tag.Name;
-                                            <button class="@($"chip {(tagActive ? "bg-rose-600 text-white" : "bg-surface-2 text-sky-700 hover:text-sky-500 dark:text-sky-300 dark:hover:text-sky-200")}")"
-                                                    @onclick="@(() => FilterByTag(tag.Tag.Name))">
-                                                #@tag.Tag.Name
-                                            </button>
-                                        }
-                                    }
-                                </div>
-                            }
-                        </div>
-                        <div class="mt-auto flex items-center justify-between border-t border-line px-3 py-2">
-                            <div class="flex items-center gap-1">
-                                <a class="icon-btn" href="@GetDownloadUrl(video.TikTokVideoId)" target="_blank" title="Download video">
-                                    <Icon Name="download" />
-                                </a>
-                                @switch (video.TranscriptStatus)
-                                {
-                                    case TranscriptStatus.Completed:
-                                        <button class="@($"icon-btn {(IsLowConfidence(video) ? "text-amber-500 hover:bg-amber-500/10" : "text-emerald-500 hover:bg-emerald-500/10")}")"
-                                                @onclick="@(() => ShowTranscript(video))"
-                                                title="@(IsLowConfidence(video) ? "Transcript (low confidence) — click to view" : "View transcript")">
-                                            <Icon Name="document-text" />
-                                        </button>
-                                        break;
-                                    case TranscriptStatus.Pending:
-                                        <span class="icon-btn cursor-default text-amber-500" title="Queued for transcription">
-                                            <Icon Name="clock" />
-                                        </span>
-                                        break;
-                                    case TranscriptStatus.Failed:
-                                        <button class="icon-btn text-rose-500 hover:bg-rose-500/10"
-                                                @onclick="@(() => QueueTranscription(video))" title="Transcription failed — click to retry">
-                                            <Icon Name="refresh" />
-                                        </button>
-                                        break;
-                                    case TranscriptStatus.Skipped:
-                                        <button class="icon-btn text-muted hover:bg-surface-2"
-                                                @onclick="@(() => QueueTranscription(video))" title="No audio / skipped — click to transcribe again">
-                                            <Icon Name="speaker-x" />
-                                        </button>
-                                        break;
-                                    default: // NotRequested
-                                        <button class="icon-btn hover:bg-sky-500/10 hover:text-sky-500"
-                                                @onclick="@(() => QueueTranscription(video))" title="Queue transcription">
-                                            <Icon Name="microphone" />
-                                        </button>
-                                        break;
-                                }
-                                @switch (video.AiSummaryStatus)
-                                {
-                                    case AiSummaryStatus.Completed:
-                                        <button class="icon-btn text-violet-500 hover:bg-violet-500/10"
-                                                @onclick="@(() => QueueAiEnrichment(video))"
-                                                title="AI enriched — click to regenerate">
-                                            <Icon Name="sparkles" />
-                                        </button>
-                                        break;
-                                    case AiSummaryStatus.Pending:
-                                        <span class="icon-btn cursor-default text-amber-500" title="Queued for AI enrichment">
-                                            <Icon Name="clock" />
-                                        </span>
-                                        break;
-                                    case AiSummaryStatus.Failed:
-                                        <button class="icon-btn text-rose-500 hover:bg-rose-500/10"
-                                                @onclick="@(() => QueueAiEnrichment(video))" title="AI enrichment failed — click to retry">
-                                            <Icon Name="refresh" />
-                                        </button>
-                                        break;
-                                    case AiSummaryStatus.Skipped:
-                                        <button class="icon-btn text-muted hover:bg-violet-500/10 hover:text-violet-500"
-                                                @onclick="@(() => QueueAiEnrichment(video))" title="AI enrichment skipped — click to enrich again">
-                                            <Icon Name="sparkles" />
-                                        </button>
-                                        break;
-                                    default: // NotRequested
-                                        <button class="icon-btn hover:bg-violet-500/10 hover:text-violet-500"
-                                                @onclick="@(() => QueueAiEnrichment(video))" title="Queue AI enrichment">
-                                            <Icon Name="sparkles" />
-                                        </button>
-                                        break;
-                                }
-                            </div>
-                            <button class="icon-btn hover:bg-rose-500/10 hover:text-rose-500"
-                                    @onclick="@(() => DeleteVideo(video.TikTokVideoId))" title="Delete video">
-                                <Icon Name="trash" />
-                            </button>
-                        </div>
-                    </div>
+                    <VideoCard Video="video"
+                               SelectedTag="selectedTag"
+                               OnTagSelected="FilterByTag"
+                               OnWorkQueued="StartStatusPolling"
+                               OnDeleted="HandleVideoDeleted" />
                 }
             </div>
 
-            @if (totalPages > 1)
-            {
-                <div class="flex flex-col items-center gap-2 pt-2">
-                    <nav class="flex items-center gap-1">
-                        <button class="icon-btn" disabled="@(currentPage == 1)"
-                                @onclick="@(() => OnPageChanged(1))" title="First page">
-                            <Icon Name="chevron-double-left" Class="size-4" />
-                        </button>
-                        <button class="icon-btn" disabled="@(currentPage == 1)"
-                                @onclick="@(() => OnPageChanged(currentPage - 1))" title="Previous page">
-                            <Icon Name="chevron-left" Class="size-4" />
-                        </button>
-                        @foreach (var page in PageNumbers())
-                        {
-                            <button class="@($"inline-flex h-9 min-w-9 items-center justify-center rounded-lg px-3 text-sm font-medium transition-colors {(page == currentPage ? "bg-sky-600 text-white" : "text-muted hover:bg-surface-2")}")"
-                                    @onclick="@(() => OnPageChanged(page))">
-                                @(page)
-                            </button>
-                        }
-                        <button class="icon-btn" disabled="@(currentPage == totalPages)"
-                                @onclick="@(() => OnPageChanged(currentPage + 1))" title="Next page">
-                            <Icon Name="chevron-right" Class="size-4" />
-                        </button>
-                        <button class="icon-btn" disabled="@(currentPage == totalPages)"
-                                @onclick="@(() => OnPageChanged(totalPages))" title="Last page">
-                            <Icon Name="chevron-double-right" Class="size-4" />
-                        </button>
-                    </nav>
-                    <p class="text-xs text-faint">
-                        Showing @((currentPage - 1) * pageSize + 1) to @Math.Min(currentPage * pageSize, totalCount) of @totalCount videos
-                    </p>
-                </div>
-            }
+            <Pagination CurrentPage="currentPage" TotalPages="totalPages" PageSize="pageSize"
+                        TotalItems="totalCount" PageUrl="PageUrl" ItemNoun="videos" />
         }
     </div>
-}
-
-@if (showTranscriptDialog && transcriptDialogVideo != null)
-{
-    <TranscriptDialog Title="@transcriptDialogTitle"
-                      Transcript="@transcriptDialogVideo.Transcript"
-                      Confidence="@transcriptDialogVideo.TranscriptConfidence"
-                      IsLowConfidence="@IsLowConfidence(transcriptDialogVideo)"
-                      OnClose="@(() => showTranscriptDialog = false)"
-                      OnDelete="@(() => DeleteTranscript(transcriptDialogVideo))" />
 }
 
 @code {
@@ -344,22 +173,11 @@ else
     private System.Timers.Timer? jobPollTimer;
     private System.Timers.Timer? statusPollTimer;
 
-    private bool showTranscriptDialog = false;
-    private string transcriptDialogTitle = string.Empty;
-    private Video? transcriptDialogVideo;
+    [SupplyParameterFromQuery] public int? Page { get; set; }
 
-    private IEnumerable<int> PageNumbers()
-    {
-        const int window = 2;
-        var start = Math.Max(1, currentPage - window);
-        var end = Math.Min(totalPages, currentPage + window);
-        for (var i = start; i <= end; i++)
-        {
-            yield return i;
-        }
-    }
+    private string PageUrl(int page) => page <= 1 ? "videos" : $"videos?page={page}";
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
         // Pick up downloads from a previous visit without re-announcing finished ones;
         // failed jobs stay visible in the panel until dismissed.
@@ -372,7 +190,13 @@ else
         {
             StartJobPolling();
         }
+    }
 
+    // Re-runs on first load and whenever ?page= changes (including browser back/forward),
+    // so the grid always reflects the page in the URL.
+    protected override async Task OnParametersSetAsync()
+    {
+        currentPage = Page is int p && p > 0 ? p : 1;
         await LoadVideos();
     }
 
@@ -428,8 +252,7 @@ else
             searchDebounceTimer?.Stop();
             await InvokeAsync(async () =>
             {
-                currentPage = 1;
-                await LoadVideos();
+                await ResetToFirstPage();
                 StateHasChanged();
             });
         };
@@ -462,8 +285,7 @@ else
 
         if (!string.IsNullOrWhiteSpace(searchQuery))
         {
-            currentPage = 1;
-            await LoadVideos();
+            await ResetToFirstPage();
         }
     }
 
@@ -526,8 +348,7 @@ else
 
         if (finishedToAnnounce.Any(j => j.Status == IngestJobStatus.Completed))
         {
-            currentPage = 1; // Reset to first page to see the new video
-            await LoadVideos();
+            await ResetToFirstPage(); // surface the new video at the top of page 1
         }
 
         if (!ingestJobs.Any(j => !j.IsFinished))
@@ -619,150 +440,43 @@ else
         statusPollTimer?.Dispose();
     }
 
-    private async Task OnPageChanged(int page)
+    // A filter change resets to page 1. If we're past page 1, navigate so the URL drops the
+    // stale ?page= (which reloads via OnParametersSetAsync); otherwise just reload in place.
+    private async Task ResetToFirstPage()
     {
-        currentPage = page;
-        await LoadVideos();
+        if (currentPage != 1)
+        {
+            Nav.NavigateTo(PageUrl(1));
+        }
+        else
+        {
+            await LoadVideos();
+        }
     }
 
     private async Task FilterByTag(string tag)
     {
         selectedTag = tag;
-        currentPage = 1;
-        await LoadVideos();
+        await ResetToFirstPage();
     }
 
     private async Task ClearTagFilter()
     {
         selectedTag = null;
-        currentPage = 1;
-        await LoadVideos();
+        await ResetToFirstPage();
     }
 
-    private async Task DeleteVideo(string videoId)
+    private async Task HandleVideoDeleted()
     {
-        if (!await JSRuntime.InvokeAsync<bool>("confirm", $"Are you sure you want to delete video {videoId}?"))
+        // The card already deleted the video and showed a toast; we just fix up paging.
+        if (videos.Count == 1 && currentPage > 1)
         {
-            return;
+            // Removed the only card on this page — drop back a page (updates the URL too).
+            Nav.NavigateTo(PageUrl(currentPage - 1));
         }
-
-        try
+        else
         {
-            await VideoService.DeleteVideoAsync(videoId);
-
-            if (videos.Count == 1 && currentPage > 1)
-            {
-                currentPage--;
-            }
-
             await LoadVideos();
-            Toast.Show("Video deleted successfully", ToastSeverity.Success);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error deleting video: {ex.Message}");
-            Toast.Show($"Error deleting video: {ex.Message}", ToastSeverity.Error);
-        }
-    }
-
-    private string GetDownloadUrl(string videoId)
-    {
-        return $"/api/video/{videoId}/download";
-    }
-
-    private async Task RemoveAiTag(Video video, VideoTag tag)
-    {
-        try
-        {
-            if (await VideoService.RemoveTagFromVideoAsync(video.TikTokVideoId, tag.TagId))
-            {
-                // Drop it from the in-memory list so the chip disappears without a reload.
-                video.Tags = video.Tags.Where(t => t.TagId != tag.TagId).ToList();
-                Toast.Show("AI tag removed", ToastSeverity.Success);
-                StateHasChanged();
-            }
-        }
-        catch (Exception ex)
-        {
-            Toast.Show($"Error removing tag: {ex.Message}", ToastSeverity.Error);
-        }
-    }
-
-    private async Task QueueTranscription(Video video)
-    {
-        try
-        {
-            if (await TranscriptionSvc.QueueAsync(video.TikTokVideoId))
-            {
-                // Reflect the new state immediately; the worker processes it in the background.
-                video.TranscriptStatus = TranscriptStatus.Pending;
-                Toast.Show("Queued for transcription", ToastSeverity.Success);
-                StartStatusPolling(); // keep the card's icon live until the worker finishes
-                StateHasChanged();
-            }
-        }
-        catch (Exception ex)
-        {
-            Toast.Show($"Error queueing transcription: {ex.Message}", ToastSeverity.Error);
-        }
-    }
-
-    private async Task QueueAiEnrichment(Video video)
-    {
-        try
-        {
-            if (await AiEnrichmentSvc.QueueAsync(video.TikTokVideoId))
-            {
-                // Reflect the new state immediately; the worker enriches once the transcript is
-                // ready (it may already be), in the background.
-                video.AiSummaryStatus = AiSummaryStatus.Pending;
-                Toast.Show("Queued for AI enrichment", ToastSeverity.Success);
-                StartStatusPolling(); // keep the card's icon live until the worker finishes
-                StateHasChanged();
-            }
-        }
-        catch (Exception ex)
-        {
-            Toast.Show($"Error queueing AI enrichment: {ex.Message}", ToastSeverity.Error);
-        }
-    }
-
-    private void ShowTranscript(Video video)
-    {
-        transcriptDialogTitle = string.IsNullOrWhiteSpace(video.Creator?.DisplayName)
-            ? "Transcript"
-            : $"Transcript — {video.Creator!.DisplayName}";
-        transcriptDialogVideo = video;
-        showTranscriptDialog = true;
-    }
-
-    private bool IsLowConfidence(Video video) =>
-        video.TranscriptConfidence is double c && c < TranscriptionSvc.LowConfidenceThreshold;
-
-    private async Task DeleteTranscript(Video video)
-    {
-        if (!await JSRuntime.InvokeAsync<bool>("confirm",
-            "Delete this transcript? It will also be removed from search."))
-        {
-            return;
-        }
-
-        try
-        {
-            if (await TranscriptionSvc.DeleteTranscriptAsync(video.TikTokVideoId))
-            {
-                // Reflect the cleared state in the list immediately.
-                video.Transcript = null;
-                video.TranscriptConfidence = null;
-                video.TranscriptStatus = TranscriptStatus.Skipped;
-                showTranscriptDialog = false;
-                Toast.Show("Transcript deleted", ToastSeverity.Success);
-                StateHasChanged();
-            }
-        }
-        catch (Exception ex)
-        {
-            Toast.Show($"Error deleting transcript: {ex.Message}", ToastSeverity.Error);
         }
     }
 }
