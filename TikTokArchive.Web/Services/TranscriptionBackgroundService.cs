@@ -28,6 +28,7 @@ namespace TikTokArchive.Web.Services
         private readonly TranscriptionSignal _signal;
         private readonly SearchIndexSignal _searchSignal;
         private readonly IServiceProvider _serviceProvider;
+        private readonly BackgroundTaskMonitor _monitor;
         private readonly MediaStorageOptions _mediaOptions;
         private readonly SpeechToTextOptions _options;
         private readonly ILogger<TranscriptionBackgroundService> _logger;
@@ -36,6 +37,7 @@ namespace TikTokArchive.Web.Services
             TranscriptionSignal signal,
             SearchIndexSignal searchSignal,
             IServiceProvider serviceProvider,
+            BackgroundTaskMonitor monitor,
             IOptions<MediaStorageOptions> mediaOptions,
             IOptions<SpeechToTextOptions> options,
             ILogger<TranscriptionBackgroundService> logger)
@@ -43,6 +45,7 @@ namespace TikTokArchive.Web.Services
             _signal = signal;
             _searchSignal = searchSignal;
             _serviceProvider = serviceProvider;
+            _monitor = monitor;
             _mediaOptions = mediaOptions.Value;
             _options = options.Value;
             _logger = logger;
@@ -140,9 +143,13 @@ namespace TikTokArchive.Web.Services
             // independently of how far the success path got.
             var retryCount = video.TranscriptRetryCount;
 
+            var filePath = ResolveVideoFile(video.TikTokVideoId);
+            _monitor.BeginItem("transcription",
+                filePath != null ? Path.GetFileName(filePath) : video.TikTokVideoId,
+                BackgroundTaskMonitor.Snippet(video.Description), "Transcribing");
+
             try
             {
-                var filePath = ResolveVideoFile(video.TikTokVideoId);
                 var result = filePath == null
                     ? new TranscriptionResult(TranscriptionOutcome.NotFound, null, null, "Video file not found")
                     : await sttService.TranscribeAsync(filePath, cancellationToken);
@@ -224,6 +231,10 @@ namespace TikTokArchive.Web.Services
                         .SetProperty(v => v.TranscriptRetryCount, retryCount + 1)
                         .SetProperty(v => v.TranscriptLastAttempt, DateTime.UtcNow)
                         .SetProperty(v => v.TranscriptErrorMessage, ex.GetFullMessage()), cancellationToken);
+            }
+            finally
+            {
+                _monitor.CompleteItem("transcription");
             }
         }
 

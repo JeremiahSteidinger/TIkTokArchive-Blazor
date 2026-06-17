@@ -1,0 +1,248 @@
+@page "/monitor"
+@using Microsoft.EntityFrameworkCore
+@using TikTokArchive.Entities
+@using TikTokArchive.Web.Services
+@inject BackgroundTaskMonitor TaskMonitor
+@inject ITranscriptionService TranscriptionSvc
+@inject IAiEnrichmentService AiEnrichmentSvc
+@inject VideoIngestQueue IngestQueue
+@inject TikTokArchiveDbContext DbContext
+@implements IDisposable
+
+<PageTitle>Process Monitor</PageTitle>
+
+<div class="mb-6 flex flex-wrap items-center gap-3">
+    <h1 class="flex-1 text-2xl font-bold text-ink">Process Monitor</h1>
+    <span class="inline-flex items-center gap-2 text-xs text-faint">
+        <span class="relative flex size-2">
+            <span class="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500 opacity-75"></span>
+            <span class="relative inline-flex size-2 rounded-full bg-emerald-500"></span>
+        </span>
+        Live — refreshes every 2s
+    </span>
+</div>
+
+<p class="mb-6 text-sm text-muted">
+    Background services and what each is working on right now. Queue depths and history live on the
+    <a href="admin" class="text-sky-600 hover:text-sky-500 dark:text-sky-400">Admin</a> page.
+</p>
+
+<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+    @foreach (var w in snapshots)
+    {
+        <div class="card flex flex-col gap-3">
+            <div class="flex items-start gap-3">
+                <div class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-muted">
+                    <Icon Name="@IconFor(w.Key)" Class="size-5" />
+                </div>
+                <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <h2 class="font-semibold text-ink">@w.DisplayName</h2>
+                        @{
+                            var pill = StatePill(w.State);
+                        }
+                        <span class="badge @pill.Class">
+                            @if (w.State == WorkerRunState.Working)
+                            {
+                                <span class="relative flex size-2">
+                                    <span class="absolute inline-flex size-full animate-ping rounded-full bg-sky-500 opacity-75"></span>
+                                    <span class="relative inline-flex size-2 rounded-full bg-sky-500"></span>
+                                </span>
+                            }
+                            @pill.Label
+                        </span>
+                    </div>
+                    <p class="mt-0.5 text-xs text-muted">@w.Description</p>
+                </div>
+            </div>
+
+            @if (w.State == WorkerRunState.Working)
+            {
+                <div class="rounded-lg border border-line bg-surface-2 p-3">
+                    <div class="mb-1.5 flex flex-wrap items-center gap-2">
+                        @if (!string.IsNullOrEmpty(w.CurrentStep))
+                        {
+                            <span class="badge badge-info">@w.CurrentStep</span>
+                        }
+                        @if (w.StartedAt.HasValue)
+                        {
+                            <span class="inline-flex items-center gap-1 text-xs text-faint">
+                                <Icon Name="clock" Class="size-3.5" /> @FormatElapsed(now - w.StartedAt.Value)
+                            </span>
+                        }
+                    </div>
+                    <div class="break-all font-mono text-sm text-ink">@(w.CurrentItem ?? "—")</div>
+                    @if (!string.IsNullOrEmpty(w.CurrentDetail))
+                    {
+                        <div class="mt-1 line-clamp-2 text-xs text-muted">@w.CurrentDetail</div>
+                    }
+                </div>
+            }
+            else if (w.State == WorkerRunState.Disabled)
+            {
+                <div class="rounded-lg border border-dashed border-line p-3 text-sm text-faint">
+                    Disabled — turn this feature on in configuration to start it.
+                </div>
+            }
+            else
+            {
+                <div class="rounded-lg border border-line p-3 text-sm text-muted">
+                    Idle — waiting for work.
+                </div>
+            }
+
+            <div class="mt-auto flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
+                @if (QueueDepth(w.Key) is int depth)
+                {
+                    <span class="inline-flex items-center gap-1">
+                        Queue
+                        <span class="@(depth > 0 ? "font-semibold text-ink" : "text-faint")">@depth</span>
+                    </span>
+                }
+                <span class="inline-flex items-center gap-1">
+                    Processed <span class="font-semibold text-ink">@w.ProcessedCount</span>
+                    <span class="text-faint">this session</span>
+                </span>
+                @if (w.LastActiveAt.HasValue)
+                {
+                    <span title="@w.LastActiveAt.Value.ToLocalTime().ToString("g")">
+                        Last @FormatAgo(now - w.LastActiveAt.Value)
+                    </span>
+                }
+            </div>
+
+            @if (!string.IsNullOrEmpty(w.LastError))
+            {
+                <button class="inline-flex w-fit cursor-pointer items-center gap-1 text-xs text-rose-600 hover:text-rose-500 dark:text-rose-400 dark:hover:text-rose-300"
+                        @onclick="@(() => ShowError(w.DisplayName, w.LastError!))">
+                    <Icon Name="error" Class="size-4" /> Last error
+                </button>
+            }
+        </div>
+    }
+</div>
+
+@if (showErrorDialog)
+{
+    <ImportErrorDialog Title="@errorDialogTitle"
+                       ErrorMessage="@errorDialogMessage"
+                       OnClose="@(() => showErrorDialog = false)" />
+}
+
+@code {
+    private IReadOnlyList<WorkerSnapshot> snapshots = new List<WorkerSnapshot>();
+    private readonly Dictionary<string, int> queueDepths = new();
+    private DateTime now = DateTime.UtcNow;
+
+    private System.Timers.Timer? pollTimer;
+    private bool refreshing;
+
+    private bool showErrorDialog;
+    private string errorDialogTitle = string.Empty;
+    private string errorDialogMessage = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+
+        // In-memory snapshots are free to read; the DB queue counts are a few cheap COUNTs.
+        // Refreshing every 2s keeps the "now processing" view feeling live without polling state.
+        pollTimer = new System.Timers.Timer(2000);
+        pollTimer.Elapsed += async (_, _) => await InvokeAsync(RefreshAsync);
+        pollTimer.Start();
+    }
+
+    private async Task RefreshAsync()
+    {
+        // The page's scoped DbContext can't run two queries at once; skip a tick if the previous
+        // refresh is still in flight rather than risk "a second operation was started on this context".
+        if (refreshing) return;
+        refreshing = true;
+        try
+        {
+            snapshots = TaskMonitor.GetSnapshots();
+            now = DateTime.UtcNow;
+            await RefreshQueueDepthsAsync();
+        }
+        catch
+        {
+            // A transient query failure shouldn't kill the polling loop; the next tick retries.
+        }
+        finally
+        {
+            refreshing = false;
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task RefreshQueueDepthsAsync()
+    {
+        // Active queue = work still waiting or retrying. Mirrors how each worker claims items.
+        var transcriptCounts = await TranscriptionSvc.GetStatusCountsAsync();
+        queueDepths["transcription"] =
+            Count(transcriptCounts, TranscriptStatus.Pending) + Count(transcriptCounts, TranscriptStatus.Failed);
+
+        var aiCounts = await AiEnrichmentSvc.GetStatusCountsAsync();
+        queueDepths["ai-enrichment"] =
+            Count(aiCounts, AiSummaryStatus.Pending) + Count(aiCounts, AiSummaryStatus.Failed);
+
+        queueDepths["search-index"] = await DbContext.SearchIndexOperations.CountAsync();
+        queueDepths["ingest"] = IngestQueue.GetJobs().Count(j => !j.IsFinished);
+        // local-import (drop folder) and search-sync (periodic) have no countable backlog.
+    }
+
+    private static int Count<TStatus>(IReadOnlyDictionary<TStatus, int> counts, TStatus status) =>
+        counts.TryGetValue(status, out var c) ? c : 0;
+
+    private int? QueueDepth(string key) => queueDepths.TryGetValue(key, out var d) ? d : null;
+
+    private static string IconFor(string key) => key switch
+    {
+        "ingest" => "download",
+        "local-import" => "video",
+        "transcription" => "microphone",
+        "ai-enrichment" => "sparkles",
+        "search-index" => "search",
+        "search-sync" => "refresh",
+        _ => "cog"
+    };
+
+    private static (string Class, string Label) StatePill(WorkerRunState state) => state switch
+    {
+        WorkerRunState.Working => ("badge-info", "Working"),
+        WorkerRunState.Idle => ("bg-surface-2 text-muted", "Idle"),
+        WorkerRunState.Disabled => ("bg-surface-2 text-faint", "Disabled"),
+        _ => ("bg-surface-2 text-muted", state.ToString())
+    };
+
+    private static string FormatElapsed(TimeSpan t)
+    {
+        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
+        if (t.TotalHours >= 1) return $"{(int)t.TotalHours}h {t.Minutes:D2}m";
+        if (t.TotalMinutes >= 1) return $"{t.Minutes}m {t.Seconds:D2}s";
+        return $"{t.Seconds}s";
+    }
+
+    private static string FormatAgo(TimeSpan t)
+    {
+        if (t < TimeSpan.FromSeconds(5)) return "just now";
+        if (t.TotalMinutes < 1) return $"{(int)t.TotalSeconds}s ago";
+        if (t.TotalHours < 1) return $"{(int)t.TotalMinutes}m ago";
+        if (t.TotalDays < 1) return $"{(int)t.TotalHours}h ago";
+        return $"{(int)t.TotalDays}d ago";
+    }
+
+    private void ShowError(string worker, string error)
+    {
+        errorDialogTitle = $"Last error — {worker}";
+        errorDialogMessage = error;
+        showErrorDialog = true;
+    }
+
+    public void Dispose()
+    {
+        pollTimer?.Stop();
+        pollTimer?.Dispose();
+    }
+}

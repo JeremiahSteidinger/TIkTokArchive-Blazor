@@ -29,6 +29,7 @@ namespace TikTokArchive.Web.Services
         private readonly AiEnrichmentSignal _signal;
         private readonly SearchIndexSignal _searchSignal;
         private readonly IServiceProvider _serviceProvider;
+        private readonly BackgroundTaskMonitor _monitor;
         private readonly AiEnrichmentOptions _options;
         private readonly ILogger<AiEnrichmentBackgroundService> _logger;
 
@@ -36,12 +37,14 @@ namespace TikTokArchive.Web.Services
             AiEnrichmentSignal signal,
             SearchIndexSignal searchSignal,
             IServiceProvider serviceProvider,
+            BackgroundTaskMonitor monitor,
             IOptions<AiEnrichmentOptions> options,
             ILogger<AiEnrichmentBackgroundService> logger)
         {
             _signal = signal;
             _searchSignal = searchSignal;
             _serviceProvider = serviceProvider;
+            _monitor = monitor;
             _options = options.Value;
             _logger = logger;
         }
@@ -148,6 +151,9 @@ namespace TikTokArchive.Web.Services
             // independently of how far the success path got.
             var retryCount = video.AiSummaryRetryCount;
 
+            _monitor.BeginItem("ai-enrichment", video.TikTokVideoId,
+                BackgroundTaskMonitor.Snippet(video.Description), "Summarizing");
+
             try
             {
                 // Feed the transcript only when there genuinely is one; Skipped/empty videos are
@@ -223,6 +229,10 @@ namespace TikTokArchive.Web.Services
                         .SetProperty(v => v.AiSummaryRetryCount, retryCount + 1)
                         .SetProperty(v => v.AiSummaryLastAttempt, DateTime.UtcNow)
                         .SetProperty(v => v.AiSummaryErrorMessage, ex.GetFullMessage()), cancellationToken);
+            }
+            finally
+            {
+                _monitor.CompleteItem("ai-enrichment");
             }
         }
 

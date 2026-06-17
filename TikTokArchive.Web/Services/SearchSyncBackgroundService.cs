@@ -15,15 +15,18 @@ namespace TikTokArchive.Web.Services
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<SearchSyncBackgroundService> _logger;
         private readonly SearchIndexSignal _signal;
+        private readonly BackgroundTaskMonitor _monitor;
 
         public SearchSyncBackgroundService(
             IServiceProvider serviceProvider,
             ILogger<SearchSyncBackgroundService> logger,
-            SearchIndexSignal signal)
+            SearchIndexSignal signal,
+            BackgroundTaskMonitor monitor)
         {
             _serviceProvider = serviceProvider;
             _logger = logger;
             _signal = signal;
+            _monitor = monitor;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -78,6 +81,8 @@ namespace TikTokArchive.Web.Services
             var searchService = scope.ServiceProvider.GetRequiredService<ISearchService>();
 
             _logger.LogInformation("Starting search index sync");
+            _monitor.BeginItem("search-sync", "Reconciling database ↔ index", null, "Comparing");
+            string? error = null;
 
             try
             {
@@ -137,7 +142,12 @@ namespace TikTokArchive.Web.Services
             }
             catch (Exception ex)
             {
+                error = ex.Message;
                 _logger.LogError(ex, "Error during search sync");
+            }
+            finally
+            {
+                _monitor.CompleteItem("search-sync", error);
             }
         }
     }
