@@ -13,9 +13,12 @@
     <div class="p-3">
         @if (!string.IsNullOrWhiteSpace(Video.TikTokVideoId))
         {
-            var videoUrl = $"/api/video/{Video.TikTokVideoId}/stream";
-            var posterUrl = $"/api/video/{Video.TikTokVideoId}/thumbnail";
+            @* mediaVersion busts the browser cache after a re-download — same URL would otherwise
+               replay the old file — and @key forces a fresh element so the player actually reloads. *@
+            var videoUrl = $"/api/video/{Video.TikTokVideoId}/stream?v={mediaVersion}";
+            var posterUrl = $"/api/video/{Video.TikTokVideoId}/thumbnail?v={mediaVersion}";
             <video id="@Video.Id"
+                   @key="mediaVersion"
                    controls
                    preload="metadata"
                    class="w-full rounded-lg bg-black"
@@ -79,6 +82,22 @@
             <a class="icon-btn" href="@GetDownloadUrl(Video.TikTokVideoId)" target="_blank" title="Download video">
                 <Icon Name="download" />
             </a>
+            <a class="icon-btn" href="@TikTokUrl.ForVideo(Video)" target="_blank" rel="noopener noreferrer" title="Open on TikTok">
+                <Icon Name="external-link" />
+            </a>
+            @if (redownloading)
+            {
+                <span class="icon-btn cursor-default text-amber-500" title="Re-downloading from TikTok…">
+                    <Icon Name="clock" />
+                </span>
+            }
+            else
+            {
+                <button class="icon-btn hover:bg-sky-500/10 hover:text-sky-500"
+                        @onclick="Redownload" title="Re-download video from TikTok">
+                    <Icon Name="cloud-arrow-down" />
+                </button>
+            }
             @switch (Video.TranscriptStatus)
             {
                 case TranscriptStatus.Completed:
@@ -183,8 +202,40 @@
 
     private bool showTranscriptDialog;
     private string transcriptDialogTitle = string.Empty;
+    private bool redownloading;
+
+    /// <summary>Bumped after a re-download so the player refetches instead of using its cache.</summary>
+    private int mediaVersion;
 
     private static string GetDownloadUrl(string videoId) => $"/api/video/{videoId}/download";
+
+    private async Task Redownload()
+    {
+        redownloading = true;
+        try
+        {
+            var job = await VideoService.QueueRedownloadAsync(Video.TikTokVideoId);
+            // The queue runs one job at a time, so this also covers waiting behind other work.
+            await job.Completion;
+
+            if (job.Status == IngestJobStatus.Failed)
+            {
+                Toast.Show($"Re-download failed: {job.Error}", ToastSeverity.Error);
+                return;
+            }
+
+            mediaVersion++;
+            Toast.Show("Video re-downloaded", ToastSeverity.Success);
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error re-downloading video: {ex.Message}", ToastSeverity.Error);
+        }
+        finally
+        {
+            redownloading = false;
+        }
+    }
 
     private bool IsLowConfidence() =>
         Video.TranscriptConfidence is double c && c < TranscriptionSvc.LowConfidenceThreshold;

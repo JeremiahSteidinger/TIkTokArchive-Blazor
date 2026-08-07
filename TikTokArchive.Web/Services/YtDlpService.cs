@@ -51,8 +51,14 @@ namespace TikTokArchive.Web.Services
 
         public async Task DownloadVideoAsync(string videoUrl, string outputTemplate, CancellationToken cancellationToken = default)
         {
+            // Prefer H.264 over TikTok's HEVC (bytevc1) formats. yt-dlp's default picks the
+            // highest resolution, which is often an HEVC stream — and TikTok delivers those
+            // video-only (no audio track) even though yt-dlp reports them as having aac audio.
+            // Preferring H.264 yields a progressive stream that actually carries audio and,
+            // as a bonus, plays in every browser (HEVC frequently won't in a <video> tag).
+            // -S only reorders preference, so it still falls back gracefully if no H.264 exists.
             var arguments = BuildArguments(
-                new[] { "--no-warnings", "--no-playlist", "-o", outputTemplate }, videoUrl);
+                new[] { "--no-warnings", "--no-playlist", "-S", "vcodec:h264", "-o", outputTemplate }, videoUrl);
             var (exitCode, _, stderr) = await RunAsync(arguments, DownloadTimeout, cancellationToken);
 
             if (exitCode != 0)

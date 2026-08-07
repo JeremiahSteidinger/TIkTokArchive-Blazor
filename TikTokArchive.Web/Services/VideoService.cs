@@ -28,6 +28,13 @@ public interface IVideoService
     Task DeleteVideoAsync(string id);
 
     /// <summary>
+    /// Queues a re-fetch of the video's media from TikTok, replacing the files on disk. The
+    /// archive entry itself — description, tags, transcript and AI summary — is left untouched.
+    /// Returns the queued job so callers can await <see cref="IngestJob.Completion"/>.
+    /// </summary>
+    Task<IngestJob> QueueRedownloadAsync(string videoId, CancellationToken ct = default);
+
+    /// <summary>
     /// The current transcript + AI-summary status of the given videos, without loading the full
     /// entities. Used by the videos page to poll for queued → completed/failed transitions.
     /// </summary>
@@ -58,6 +65,7 @@ public class VideoService : IVideoService
     private readonly ILogger<VideoService> logger;
     private readonly ISearchService searchService;
     private readonly SearchIndexSignal searchSignal;
+    private readonly VideoIngestQueue ingestQueue;
     private readonly MediaStorageOptions mediaOptions;
 
     public VideoService(
@@ -65,12 +73,14 @@ public class VideoService : IVideoService
         ILogger<VideoService> logger,
         ISearchService searchService,
         SearchIndexSignal searchSignal,
+        VideoIngestQueue ingestQueue,
         IOptions<MediaStorageOptions> mediaOptions)
     {
         this.dbContextFactory = dbContextFactory;
         this.logger = logger;
         this.searchService = searchService;
         this.searchSignal = searchSignal;
+        this.ingestQueue = ingestQueue;
         this.mediaOptions = mediaOptions.Value;
     }
 
@@ -247,6 +257,22 @@ public class VideoService : IVideoService
 
         var sanitizedId = id.Replace("\r", string.Empty).Replace("\n", string.Empty);
         logger.LogInformation("Successfully deleted video with ID {VideoId}", sanitizedId);
+    }
+
+    public async Task<IngestJob> QueueRedownloadAsync(string videoId, CancellationToken ct = default)
+    {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(ct);
+        var video = await dbContext.Videos
+            .Include(v => v.Creator)
+            .FirstOrDefaultAsync(v => v.TikTokVideoId == videoId, ct);
+
+        if (video == null)
+        {
+            throw new KeyNotFoundException($"Video with ID {videoId} not found.");
+        }
+
+        // The source URL isn't stored, so rebuild it from the creator handle + video id.
+        return ingestQueue.Enqueue(TikTokUrl.ForVideo(video), redownload: true);
     }
 
     public async Task<bool> RemoveTagFromVideoAsync(string videoId, int tagId, CancellationToken ct = default)
