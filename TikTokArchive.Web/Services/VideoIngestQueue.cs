@@ -19,6 +19,13 @@ namespace TikTokArchive.Web.Services
 
         public Guid Id { get; } = Guid.NewGuid();
         public required string Url { get; init; }
+
+        /// <summary>
+        /// Re-fetch the media for a video already in the archive: the duplicate check is skipped
+        /// and the database row is left untouched, only the files on disk are replaced.
+        /// </summary>
+        public bool Redownload { get; init; }
+
         public IngestJobStatus Status { get; set; } = IngestJobStatus.Queued;
         public string? VideoId { get; set; }
         public string? Error { get; private set; }
@@ -70,11 +77,11 @@ namespace TikTokArchive.Web.Services
         /// Validates the URL and queues it for download. Throws <see cref="ArgumentException"/>
         /// with a user-presentable message when the URL is rejected.
         /// </summary>
-        public IngestJob Enqueue(string videoUrl)
+        public IngestJob Enqueue(string videoUrl, bool redownload = false)
         {
             var normalizedUrl = ValidateUrl(videoUrl);
 
-            var job = new IngestJob { Url = normalizedUrl };
+            var job = new IngestJob { Url = normalizedUrl, Redownload = redownload };
             _jobs[job.Id] = job;
             _channel.Writer.TryWrite(job);
 
