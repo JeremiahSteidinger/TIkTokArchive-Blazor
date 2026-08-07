@@ -100,14 +100,24 @@ namespace TikTokArchive.Web.Services
                 var metadata = await ytDlp.FetchMetadataAsync(job.Url, cancellationToken);
                 job.VideoId = metadata.VideoId;
 
+                Directory.CreateDirectory(_mediaOptions.VideosPath);
+                Directory.CreateDirectory(_mediaOptions.ThumbnailsPath);
+
+                // A re-download deliberately stops here: the row already exists and its
+                // description, tags and transcript are left as they are.
+                if (job.Redownload)
+                {
+                    await RedownloadMediaAsync(job, ytDlp, metadata, cancellationToken);
+                    job.MarkCompleted();
+                    _logger.LogInformation("Video {VideoId} media re-downloaded", metadata.VideoId);
+                    return;
+                }
+
                 if (await dbContext.Videos.AnyAsync(v => v.TikTokVideoId == metadata.VideoId, cancellationToken))
                 {
                     job.MarkFailed("Video already exists in the archive");
                     return;
                 }
-
-                Directory.CreateDirectory(_mediaOptions.VideosPath);
-                Directory.CreateDirectory(_mediaOptions.ThumbnailsPath);
 
                 job.Status = IngestJobStatus.Downloading;
                 _monitor.UpdateStep("ingest", "Downloading");
@@ -134,12 +144,89 @@ namespace TikTokArchive.Web.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Ingest failed for URL {Url}", job.Url);
-                CleanUpMediaFiles(job.VideoId);
+                // Only a first ingest cleans up: a failed re-download never swapped its staged
+                // file in, so the media already in the archive is still intact and must stay.
+                if (!job.Redownload)
+                {
+                    CleanUpMediaFiles(job.VideoId);
+                }
                 job.MarkFailed(ex.GetFullMessage());
             }
             finally
             {
                 _monitor.CompleteItem("ingest", job.Status == IngestJobStatus.Failed ? job.Error : null);
+            }
+        }
+
+        /// <summary>
+        /// Replaces the media of a video already in the archive. The replacement is downloaded to
+        /// a staging folder and only swapped in once it succeeds, so a failed re-download can't
+        /// leave the archive with no file at all. Staging sits under the videos directory to keep
+        /// the swap a same-volume rename rather than a copy across the media mount.
+        /// </summary>
+        private async Task RedownloadMediaAsync(
+            IngestJob job, IYtDlpService ytDlp, TikTokVideo metadata, CancellationToken cancellationToken)
+        {
+            job.Status = IngestJobStatus.Downloading;
+            _monitor.UpdateStep("ingest", "Downloading");
+
+            var stagingDirectory = Path.Combine(_mediaOptions.VideosPath, ".redownload", metadata.VideoId);
+            try
+            {
+                Directory.CreateDirectory(stagingDirectory);
+                await ytDlp.DownloadVideoAsync(
+                    job.Url, Path.Combine(stagingDirectory, "%(id)s.%(ext)s"), cancellationToken);
+
+                var staged = Directory.GetFiles(stagingDirectory);
+                if (staged.Length == 0)
+                {
+                    throw new InvalidOperationException("yt-dlp reported success but produced no file");
+                }
+
+                job.Status = IngestJobStatus.Saving;
+                _monitor.UpdateStep("ingest", "Saving");
+
+                // Drop the old media only now that a replacement is in hand. The extension can
+                // differ from last time, so clear every candidate rather than just overwriting —
+                // otherwise a stale .mp4 would keep shadowing a new .webm in the media lookups.
+                DeleteVideoFiles(metadata.VideoId);
+                foreach (var file in staged)
+                {
+                    File.Move(file, Path.Combine(_mediaOptions.VideosPath, Path.GetFileName(file)), overwrite: true);
+                }
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(stagingDirectory, recursive: true);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to clean up staging directory {Directory}", stagingDirectory);
+                }
+            }
+
+            await DownloadThumbnailAsync(metadata, cancellationToken);
+        }
+
+        /// <summary>
+        /// Deletes a video's media files by probing the extensions yt-dlp can produce. Enumerating
+        /// the videos directory would mean listing thousands of files on a network mount.
+        /// </summary>
+        private void DeleteVideoFiles(string videoId)
+        {
+            foreach (var extension in new[] { ".mp4", ".webm", ".mov", ".avi", ".mkv" })
+            {
+                var path = Path.Combine(_mediaOptions.VideosPath, videoId + extension);
+                try
+                {
+                    File.Delete(path); // no-op when the file isn't there
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to delete media file {File}", path);
+                }
             }
         }
 
