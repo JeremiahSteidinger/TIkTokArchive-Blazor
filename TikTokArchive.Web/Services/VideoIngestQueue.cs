@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using TikTokArchive.Entities;
 
 namespace TikTokArchive.Web.Services
 {
@@ -19,6 +20,7 @@ namespace TikTokArchive.Web.Services
 
         public Guid Id { get; } = Guid.NewGuid();
         public required string Url { get; init; }
+        public required Platform Platform { get; init; }
 
         /// <summary>
         /// Re-fetch the media for a video already in the archive: the duplicate check is skipped
@@ -79,9 +81,9 @@ namespace TikTokArchive.Web.Services
         /// </summary>
         public IngestJob Enqueue(string videoUrl, bool redownload = false)
         {
-            var normalizedUrl = ValidateUrl(videoUrl);
+            var (normalizedUrl, platform) = ValidateUrl(videoUrl);
 
-            var job = new IngestJob { Url = normalizedUrl, Redownload = redownload };
+            var job = new IngestJob { Url = normalizedUrl, Platform = platform, Redownload = redownload };
             _jobs[job.Id] = job;
             _channel.Writer.TryWrite(job);
 
@@ -98,7 +100,7 @@ namespace TikTokArchive.Web.Services
         public IngestJob? GetJob(Guid jobId) =>
             _jobs.TryGetValue(jobId, out var job) ? job : null;
 
-        private static string ValidateUrl(string videoUrl)
+        private static (string NormalizedUrl, Platform Platform) ValidateUrl(string videoUrl)
         {
             if (string.IsNullOrWhiteSpace(videoUrl))
             {
@@ -111,19 +113,26 @@ namespace TikTokArchive.Web.Services
                 throw new ArgumentException("Invalid video URL format.");
             }
 
-            // Restrict to TikTok domains to prevent abuse while allowing all legitimate subdomains
-            var host = videoUri.Host;
-            bool isTikTokHost =
-                host.Equals("tiktok.com", StringComparison.OrdinalIgnoreCase) ||
-                host.EndsWith(".tiktok.com", StringComparison.OrdinalIgnoreCase);
+            // Restrict to known platform domains to prevent abuse while allowing all legitimate
+            // subdomains. Host-only gate: yt-dlp resolves every path shape (short links,
+            // /reel/, /reels/, /p/, /share/) itself.
+            var platform = ResolvePlatform(videoUri.Host)
+                ?? throw new ArgumentException("Only TikTok and Instagram URLs are allowed.");
 
-            if (!isTikTokHost)
-            {
-                throw new ArgumentException("Only TikTok URLs are allowed.");
-            }
-
-            return videoUri.ToString();
+            return (videoUri.ToString(), platform);
         }
+
+        private static Platform? ResolvePlatform(string host)
+        {
+            if (MatchesDomain(host, "tiktok.com")) return Platform.TikTok;
+            if (MatchesDomain(host, "instagram.com")) return Platform.Instagram;
+            if (MatchesDomain(host, "instagr.am")) return Platform.Instagram; // legacy share links
+            return null;
+        }
+
+        private static bool MatchesDomain(string host, string domain) =>
+            host.Equals(domain, StringComparison.OrdinalIgnoreCase) ||
+            host.EndsWith("." + domain, StringComparison.OrdinalIgnoreCase);
 
         private void PruneFinishedJobs()
         {

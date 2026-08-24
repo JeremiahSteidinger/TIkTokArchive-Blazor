@@ -113,7 +113,8 @@ namespace TikTokArchive.Web.Services
                     return;
                 }
 
-                if (await dbContext.Videos.AnyAsync(v => v.TikTokVideoId == metadata.VideoId, cancellationToken))
+                if (await dbContext.Videos.AnyAsync(
+                    v => v.Platform == job.Platform && v.TikTokVideoId == metadata.VideoId, cancellationToken))
                 {
                     job.MarkFailed("Video already exists in the archive");
                     return;
@@ -128,7 +129,7 @@ namespace TikTokArchive.Web.Services
 
                 job.Status = IngestJobStatus.Saving;
                 _monitor.UpdateStep("ingest", "Saving");
-                await SaveVideoAsync(dbContext, metadata, cancellationToken);
+                await SaveVideoAsync(dbContext, metadata, job.Platform, job.Url, cancellationToken);
                 _searchSignal.Notify();
                 _transcriptionSignal.Notify();
                 // Wakes the AI worker; it no-ops until the transcript completes, then enriches.
@@ -253,23 +254,38 @@ namespace TikTokArchive.Web.Services
         }
 
         private static async Task SaveVideoAsync(
-            TikTokArchiveDbContext dbContext, TikTokVideo metadata, CancellationToken cancellationToken)
+            TikTokArchiveDbContext dbContext, TikTokVideo metadata, Platform platform, string submittedUrl,
+            CancellationToken cancellationToken)
         {
             var (cleanedDescription, tagNames) = TagParser.Parse(metadata.Description);
 
-            var creator = await dbContext.Creators
-                .FirstOrDefaultAsync(c => c.TikTokId == metadata.Uploader, cancellationToken)
-                ?? new Creator { TikTokId = metadata.Uploader, DisplayName = metadata.Channel };
+            // The yt-dlp uploader fields carry different things per platform: TikTok puts the
+            // @handle in uploader_id and the display name in uploader; Instagram puts the
+            // username in channel, the full name in uploader, and often a numeric account id
+            // in uploader_id.
+            var (handle, displayName) = platform == Platform.Instagram
+                ? (FirstNonEmpty(metadata.ChannelHandle, metadata.Uploader),
+                   FirstNonEmpty(metadata.Channel, metadata.ChannelHandle))
+                : (metadata.Uploader, metadata.Channel);
 
-            // Resolve hashtags to Tag rows (accent/case-insensitively) as TikTok-sourced tags.
+            var creator = await dbContext.Creators
+                .FirstOrDefaultAsync(c => c.Platform == platform && c.TikTokId == handle, cancellationToken)
+                ?? new Creator { Platform = platform, TikTokId = handle, DisplayName = displayName };
+
+            // Resolve hashtags to Tag rows (accent/case-insensitively) as platform-sourced tags.
             var videoTags = await TagUpsertHelper.BuildVideoTagsAsync(
                 dbContext, tagNames, TagSource.TikTok, cancellationToken: cancellationToken);
 
             var video = new Video
             {
+                Platform = platform,
                 TikTokVideoId = metadata.VideoId,
+                SourceUrl = string.IsNullOrWhiteSpace(metadata.WebpageUrl) ? submittedUrl : metadata.WebpageUrl,
                 Description = cleanedDescription,
-                CreatedAt = DateTimeOffset.FromUnixTimeSeconds(metadata.Timestamp).UtcDateTime,
+                // Instagram sometimes omits the timestamp; fall back to now rather than 1970.
+                CreatedAt = metadata.Timestamp > 0
+                    ? DateTimeOffset.FromUnixTimeSeconds(metadata.Timestamp).UtcDateTime
+                    : DateTime.UtcNow,
                 AddedToApp = DateTime.UtcNow,
                 Creator = creator,
                 Tags = videoTags
@@ -285,6 +301,9 @@ namespace TikTokArchive.Web.Services
 
             await dbContext.SaveChangesAsync(cancellationToken);
         }
+
+        private static string FirstNonEmpty(string first, string second) =>
+            string.IsNullOrWhiteSpace(first) ? second : first;
 
         private void CleanUpMediaFiles(string? videoId)
         {

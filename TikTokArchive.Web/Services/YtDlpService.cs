@@ -135,7 +135,20 @@ namespace TikTokArchive.Web.Services
         private static string Summarize(string stderr)
         {
             var trimmed = stderr.Trim();
-            return trimmed.Length <= 500 ? trimmed : trimmed[..500];
+            var summary = trimmed.Length <= 500 ? trimmed : trimmed[..500];
+
+            // Instagram gates most content behind login; turn its most common failures into an
+            // actionable message. Matches the observed wordings: "login required", "rate-limit
+            // reached", and "…accessible in your browser without being logged-in… use --cookies".
+            if (summary.Contains("login", StringComparison.OrdinalIgnoreCase) ||
+                summary.Contains("logged-in", StringComparison.OrdinalIgnoreCase) ||
+                summary.Contains("rate-limit", StringComparison.OrdinalIgnoreCase) ||
+                summary.Contains("cookies", StringComparison.OrdinalIgnoreCase))
+            {
+                summary += " — sync cookies from the browser extension and retry.";
+            }
+
+            return summary;
         }
     }
 }
