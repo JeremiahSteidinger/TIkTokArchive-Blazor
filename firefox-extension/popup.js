@@ -63,9 +63,11 @@ async function syncCookies() {
   syncBtn.disabled = true;
   setStatus("Syncing cookies…");
   try {
-    const cookies = await browser.cookies.getAll({ domain: "tiktok.com" });
+    const tiktokCookies = await browser.cookies.getAll({ domain: "tiktok.com" });
+    const instagramCookies = await browser.cookies.getAll({ domain: "instagram.com" });
+    const cookies = [...tiktokCookies, ...instagramCookies];
     if (cookies.length === 0) {
-      setStatus("No TikTok cookies found — log in at tiktok.com first", "error");
+      setStatus("No TikTok or Instagram cookies found — log in first", "error");
       return;
     }
 
@@ -88,7 +90,17 @@ async function syncCookies() {
       throw new Error(`${resp.status} ${await resp.text()}`);
     }
     const data = await resp.json();
-    setStatus(`Synced ${data.count} cookies`, "ok");
+    // Instagram needs a logged-in session (sessionid) for yt-dlp to download anything;
+    // anonymous cookies like csrftoken/mid sync fine but don't authenticate. Surface
+    // that here, since a bare total made "synced but not logged in" look like success.
+    const igLoggedIn = instagramCookies.some((c) => c.name === "sessionid");
+    const summary =
+      `Synced ${data.count} cookies (${tiktokCookies.length} TikTok, ${instagramCookies.length} Instagram)`;
+    if (instagramCookies.length > 0 && !igLoggedIn) {
+      setStatus(`${summary} — no Instagram login session; log in at instagram.com and re-sync`, "error");
+    } else {
+      setStatus(summary, "ok");
+    }
     refreshCookieInfo(appUrl);
   } catch (err) {
     setStatus(`Cookie sync failed: ${err.message}`, "error");
@@ -142,14 +154,21 @@ async function init() {
   const appUrl = await getAppUrl();
   appUrlInput.value = appUrl;
 
-  // The archive button only makes sense on a TikTok video page.
+  // The archive button only makes sense on a video page. TikTok enables on any page
+  // (as before); Instagram only on post-shaped paths so a profile or the home feed —
+  // which yt-dlp can't download as a single video — doesn't get queued. The server
+  // still validates by host only.
   try {
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-    const hostname = new URL(tab.url).hostname;
+    const url = new URL(tab.url);
+    const hostname = url.hostname;
     const onTikTok = hostname === "tiktok.com" || hostname.endsWith(".tiktok.com");
-    archiveBtn.disabled = !onTikTok;
-    if (!onTikTok) {
-      archiveBtn.title = "Open a TikTok video to archive it";
+    const onInstagram =
+      (hostname === "instagram.com" || hostname.endsWith(".instagram.com")) &&
+      /^\/(reel|reels|p)\//.test(url.pathname);
+    archiveBtn.disabled = !(onTikTok || onInstagram);
+    if (archiveBtn.disabled) {
+      archiveBtn.title = "Open a TikTok or Instagram video to archive it";
     }
   } catch {
     archiveBtn.disabled = true;

@@ -7,7 +7,10 @@ namespace TikTokArchive.Entities
     /// </summary>
     public enum TagSource
     {
-        /// <summary>Parsed from the TikTok description hashtags at ingest. The CLR default (0).</summary>
+        /// <summary>
+        /// Parsed from the source platform's description hashtags at ingest, whichever platform
+        /// that is. The CLR default (0); the name predates Instagram support.
+        /// </summary>
         TikTok = 0,
 
         /// <summary>Suggested by the AI enrichment pass. Visually distinct and user-removable.</summary>

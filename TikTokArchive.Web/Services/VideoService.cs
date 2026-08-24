@@ -271,8 +271,9 @@ public class VideoService : IVideoService
             throw new KeyNotFoundException($"Video with ID {videoId} not found.");
         }
 
-        // The source URL isn't stored, so rebuild it from the creator handle + video id.
-        return ingestQueue.Enqueue(TikTokUrl.ForVideo(video), redownload: true);
+        // Uses the stored SourceUrl when present; legacy rows without one get a URL rebuilt
+        // from the creator handle + video id.
+        return ingestQueue.Enqueue(PlatformUrl.ForVideo(video), redownload: true);
     }
 
     public async Task<bool> RemoveTagFromVideoAsync(string videoId, int tagId, CancellationToken ct = default)

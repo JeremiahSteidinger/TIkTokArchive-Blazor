@@ -6,7 +6,13 @@ namespace TikTokArchive.Entities
     {
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
         public int Id { get; set; }
+        public Platform Platform { get; set; }
+        // The platform's video id (TikTok numeric id or Instagram shortcode), regardless of
+        // platform — the column predates Instagram support and keeps its original name.
         public string TikTokVideoId { get; set; }
+        // Canonical watch URL captured at ingest (yt-dlp webpage_url, else the submitted URL).
+        // Null on rows archived before this column existed; PlatformUrl reconstructs those.
+        public string? SourceUrl { get; set; }
         public string Description { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTime AddedToApp { get; set; }

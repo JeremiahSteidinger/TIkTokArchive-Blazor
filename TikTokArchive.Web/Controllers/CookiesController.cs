@@ -6,9 +6,11 @@ using TikTokArchive.Web.Options;
 namespace TikTokArchive.Web.Controllers
 {
     /// <summary>
-    /// Receives TikTok cookies from the Firefox companion extension and stores them in
-    /// Netscape cookies.txt format at <see cref="YtDlpOptions.CookiesFile"/>, where
-    /// yt-dlp picks them up for age-restricted/login-gated posts.
+    /// Receives TikTok and Instagram cookies from the Firefox companion extension and stores
+    /// them in Netscape cookies.txt format at <see cref="YtDlpOptions.CookiesFile"/>, where
+    /// yt-dlp picks them up for age-restricted/login-gated posts. Cookies for a platform that
+    /// isn't in the push are kept from the existing jar, so syncing from one browser doesn't
+    /// wipe the other platform's login.
     /// </summary>
     [Route("api/[controller]")]
     [ApiController]
@@ -50,12 +52,13 @@ namespace TikTokArchive.Web.Controllers
             };
 
             var count = 0;
+            var pushedGroups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var cookie in cookies)
             {
                 var domain = cookie.Domain.TrimStart('.');
-                var isTikTok = domain.Equals("tiktok.com", StringComparison.OrdinalIgnoreCase) ||
-                               domain.EndsWith(".tiktok.com", StringComparison.OrdinalIgnoreCase);
-                if (!isTikTok) continue;
+                var group = DomainGroup(domain);
+                if (group == null) continue;
+                pushedGroups.Add(group);
 
                 // Expired cookies and values that would corrupt the tab-separated jar are skipped.
                 if (cookie.ExpirationDate.HasValue && cookie.ExpirationDate.Value < now) continue;
@@ -79,8 +82,12 @@ namespace TikTokArchive.Web.Controllers
 
             if (count == 0)
             {
-                return BadRequest("No valid TikTok cookies in the request");
+                return BadRequest("No valid TikTok or Instagram cookies in the request");
             }
+
+            // Keep existing jar lines for platforms this push didn't include, so a TikTok-only
+            // sync can't log the archive out of Instagram (or vice versa).
+            lines.AddRange(await ReadRetainedLinesAsync(pushedGroups));
 
             var directory = System.IO.Path.GetDirectoryName(_options.CookiesFile);
             if (!string.IsNullOrEmpty(directory))
@@ -94,7 +101,8 @@ namespace TikTokArchive.Web.Controllers
             await System.IO.File.WriteAllTextAsync(tempPath, string.Join('\n', lines) + "\n", new UTF8Encoding(false));
             System.IO.File.Move(tempPath, _options.CookiesFile, overwrite: true);
 
-            _logger.LogInformation("Stored {Count} TikTok cookies for yt-dlp", count);
+            _logger.LogInformation(
+                "Stored {Count} cookies for yt-dlp ({Groups})", count, string.Join(", ", pushedGroups));
             return Ok(new { count });
         }
 
@@ -107,6 +115,48 @@ namespace TikTokArchive.Web.Controllers
                 exists = fileInfo.Exists,
                 lastModified = fileInfo.Exists ? fileInfo.LastWriteTimeUtc : (DateTime?)null
             });
+        }
+
+        /// <summary>
+        /// The platform family a cookie domain belongs to, or null for domains the archive has
+        /// no use for. The group name doubles as the retention key when merging jars.
+        /// </summary>
+        private static string? DomainGroup(string domain)
+        {
+            foreach (var root in new[] { "tiktok.com", "instagram.com" })
+            {
+                if (domain.Equals(root, StringComparison.OrdinalIgnoreCase) ||
+                    domain.EndsWith("." + root, StringComparison.OrdinalIgnoreCase))
+                {
+                    return root;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Cookie lines from the existing jar whose platform wasn't part of this push.
+        /// </summary>
+        private async Task<List<string>> ReadRetainedLinesAsync(IReadOnlySet<string> pushedGroups)
+        {
+            var retained = new List<string>();
+            if (!System.IO.File.Exists(_options.CookiesFile))
+            {
+                return retained;
+            }
+
+            foreach (var line in await System.IO.File.ReadAllLinesAsync(_options.CookiesFile))
+            {
+                if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#')) continue;
+
+                var domain = line.Split('\t')[0].TrimStart('.');
+                var group = DomainGroup(domain);
+                if (group != null && !pushedGroups.Contains(group))
+                {
+                    retained.Add(line);
+                }
+            }
+            return retained;
         }
 
         private static bool ContainsJarBreakingChars(string value) =>

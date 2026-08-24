@@ -4,6 +4,9 @@ using TikTokArchive.Entities;
 
 namespace TikTokArchive.Web.Services
 {
+    // Deliberately has no Platform field: nothing filters search results by platform yet, and
+    // adding one is a doc-shape change that forces an index-name bump (tiktok_videos_v5) plus a
+    // full reindex via the Admin page. When a platform filter is wanted, add it as a Keyword.
     public class VideoDocument
     {
         public string VideoId { get; set; } = string.Empty;

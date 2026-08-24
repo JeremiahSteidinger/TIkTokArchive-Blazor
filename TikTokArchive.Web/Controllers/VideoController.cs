@@ -56,7 +56,7 @@ namespace TikTokArchive.Web.Controllers
 
             // Get video metadata for friendly filename (async after finding file)
             var video = await videoService.GetVideoAsync(id);
-            var downloadFileName = $"{video?.Creator?.DisplayName?.Replace(" ", "_") ?? "TikTok"}_{id}{fileExtension}";
+            var downloadFileName = $"{video?.Creator?.DisplayName?.Replace(" ", "_") ?? PlatformUrl.DisplayName(video?.Platform ?? Platform.TikTok)}_{id}{fileExtension}";
 
             return PhysicalFile(filePath, contentType, downloadFileName);
         }

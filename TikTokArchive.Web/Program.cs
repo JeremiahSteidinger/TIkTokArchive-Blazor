@@ -163,7 +163,7 @@ namespace TikTokArchive.Web
             // the start — including ones gated off by a feature flag, which show as Disabled. The
             // enabled flags must match the AddHostedService conditions above.
             var monitor = app.Services.GetRequiredService<BackgroundTaskMonitor>();
-            monitor.Register("ingest", "Video Download", "Downloads TikTok videos via yt-dlp.", enabled: true);
+            monitor.Register("ingest", "Video Download", "Downloads TikTok and Instagram videos via yt-dlp.", enabled: true);
             monitor.Register("local-import", "Local Import", "Imports video files dropped into the watch folder.", enabled: true);
             monitor.Register("transcription", "Transcription", "Transcribes video audio to text via Whisper.",
                 enabled: builder.Configuration.GetValue<bool>("SpeechToText:Enabled"));
