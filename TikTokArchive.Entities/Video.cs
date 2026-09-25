@@ -29,13 +29,21 @@ namespace TikTokArchive.Entities
         public string? TranscriptErrorMessage { get; set; }
 
         // AI enrichment. After the transcript is ready, the enrichment worker makes a single
-        // local-LLM call that fills in Summary and the video's AI-sourced tags (VideoTags with
-        // Source = Ai). One status covers both outputs since they come from the same call.
+        // LLM call (Local/Ollama or Gemini, per AiProviderSettings) that fills in Summary and the
+        // video's AI-sourced tags (VideoTags with Source = Ai). One status covers both outputs
+        // since they come from the same call.
         public AiSummaryStatus AiSummaryStatus { get; set; }
         public string? Summary { get; set; }
         public int AiSummaryRetryCount { get; set; }
         public DateTime? AiSummaryLastAttempt { get; set; }
         public string? AiSummaryErrorMessage { get; set; }
+
+        // Which provider/model produced the current Summary — set on a successful enrichment,
+        // left as-is (not cleared) while a re-run is pending/failed. Null means never successfully
+        // enriched. Lets the admin UI find/re-queue videos enriched by a specific provider, e.g.
+        // to re-run everything the local model summarized through Gemini instead.
+        public AiProvider? AiSummaryProvider { get; set; }
+        public string? AiSummaryModel { get; set; }
 
         public virtual Creator Creator { get; set; }
         public virtual IEnumerable<VideoTag> Tags { get; set; }

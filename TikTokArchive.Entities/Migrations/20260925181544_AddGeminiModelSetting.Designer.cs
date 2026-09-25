@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TikTokArchive.Entities;
 
@@ -11,9 +12,11 @@ using TikTokArchive.Entities;
 namespace TikTokArchive.Entities.Migrations
 {
     [DbContext(typeof(TikTokArchiveDbContext))]
-    partial class TikTokArchiveDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260925181544_AddGeminiModelSetting")]
+    partial class AddGeminiModelSetting
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -43,9 +46,6 @@ namespace TikTokArchive.Entities.Migrations
 
                     b.Property<int>("Provider")
                         .HasColumnType("int");
-
-                    b.Property<string>("SystemPrompt")
-                        .HasColumnType("longtext");
 
                     b.HasKey("Id");
 
@@ -208,12 +208,6 @@ namespace TikTokArchive.Entities.Migrations
                     b.Property<DateTime?>("AiSummaryLastAttempt")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<string>("AiSummaryModel")
-                        .HasColumnType("longtext");
-
-                    b.Property<int?>("AiSummaryProvider")
-                        .HasColumnType("int");
-
                     b.Property<int>("AiSummaryRetryCount")
                         .HasColumnType("int");
 
@@ -262,8 +256,6 @@ namespace TikTokArchive.Entities.Migrations
                         .HasColumnType("int");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("AiSummaryProvider");
 
                     b.HasIndex("CreatorId");
 

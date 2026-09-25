@@ -173,6 +173,8 @@ namespace TikTokArchive.Web.Services
                         video.Summary = result.Summary;
                         video.AiSummaryStatus = AiSummaryStatus.Completed;
                         video.AiSummaryErrorMessage = null;
+                        video.AiSummaryProvider = result.Provider;
+                        video.AiSummaryModel = result.Model;
                         await AddAiTagsAsync(dbContext, video, result.Tags, cancellationToken);
                         reindex = true;
                         break;

@@ -121,15 +121,27 @@ namespace TikTokArchive.Web
                 builder.Services.AddHostedService<TranscriptionBackgroundService>();
             }
 
-            // AI enrichment: a local LLM (Ollama) generates a short summary and AI tags from the
-            // transcript + description once transcription completes, then re-indexes through the
-            // search outbox. Same shape as speech-to-text: the signal and management service are
-            // always registered (so ingest's Notify() and the admin UI work when disabled); the
-            // LLM client + worker are gated behind the feature flag.
+            // AI enrichment: a local LLM (Ollama) or Google Gemini — chosen at runtime via the
+            // admin-editable AiProviderSettings row — generates a short summary and AI tags from
+            // the transcript + description once transcription completes, then re-indexes through
+            // the search outbox. Same shape as speech-to-text: the signal and management service
+            // are always registered (so ingest's Notify() and the admin UI work when disabled);
+            // the LLM clients + worker are gated behind the feature flag.
             builder.Services.Configure<AiEnrichmentOptions>(
                 builder.Configuration.GetSection(AiEnrichmentOptions.SectionName));
             builder.Services.AddSingleton<AiEnrichmentSignal>();
             builder.Services.AddScoped<IAiEnrichmentService, AiEnrichmentService>();
+
+            // The Gemini HTTP client + model catalog are always registered (not gated behind
+            // AiEnrichment:Enabled) so the admin UI can validate a key and list/pick a model even
+            // before the feature is switched on.
+            builder.Services.AddHttpClient(GeminiVideoSummaryService.HttpClientName, (sp, client) =>
+            {
+                var options = sp.GetRequiredService<IOptions<AiEnrichmentOptions>>().Value;
+                client.BaseAddress = new Uri("https://generativelanguage.googleapis.com/");
+                client.Timeout = TimeSpan.FromMinutes(options.TimeoutMinutes);
+            });
+            builder.Services.AddSingleton<GeminiModelCatalogService>();
 
             if (builder.Configuration.GetValue<bool>("AiEnrichment:Enabled"))
             {
@@ -140,7 +152,12 @@ namespace TikTokArchive.Web
                     // CPU inference of a small model takes seconds to tens of seconds.
                     client.Timeout = TimeSpan.FromMinutes(options.TimeoutMinutes);
                 });
-                builder.Services.AddSingleton<IVideoSummaryService, OllamaVideoSummaryService>();
+                // Both providers are registered as themselves (scoped, since Gemini reads its API
+                // key from the scoped DbContext) and the router picks the active one from the
+                // DB-backed AiProviderSettings row on every call.
+                builder.Services.AddScoped<OllamaVideoSummaryService>();
+                builder.Services.AddScoped<GeminiVideoSummaryService>();
+                builder.Services.AddScoped<IVideoSummaryService, AiSummaryProviderRouter>();
                 builder.Services.AddHostedService<AiEnrichmentBackgroundService>();
             }
 
@@ -167,7 +184,7 @@ namespace TikTokArchive.Web
             monitor.Register("local-import", "Local Import", "Imports video files dropped into the watch folder.", enabled: true);
             monitor.Register("transcription", "Transcription", "Transcribes video audio to text via Whisper.",
                 enabled: builder.Configuration.GetValue<bool>("SpeechToText:Enabled"));
-            monitor.Register("ai-enrichment", "AI Enrichment", "Generates summaries and tags via a local LLM.",
+            monitor.Register("ai-enrichment", "AI Enrichment", "Generates summaries and tags via a local LLM or Gemini.",
                 enabled: builder.Configuration.GetValue<bool>("AiEnrichment:Enabled"));
             monitor.Register("search-index", "Search Indexer", "Applies queued OpenSearch index operations.", enabled: true);
             monitor.Register("search-sync", "Search Sync", "Reconciles the database with the search index.", enabled: true);

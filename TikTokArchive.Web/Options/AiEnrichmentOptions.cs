@@ -13,6 +13,9 @@ namespace TikTokArchive.Web.Options
         /// <summary>Ollama model tag used for summarization + tagging. A small instruct model is plenty.</summary>
         public string Model { get; set; } = "llama3.2:3b";
 
+        /// <summary>Gemini model used for summarization + tagging when the Gemini provider is selected.</summary>
+        public string GeminiModel { get; set; } = "gemini-3.8-flash";
+
         /// <summary>HTTP timeout for a single enrichment. CPU inference of a small model takes seconds to tens of seconds.</summary>
         public int TimeoutMinutes { get; set; } = 10;
 

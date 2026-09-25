@@ -11,6 +11,7 @@ namespace TikTokArchive.Entities
         public DbSet<SearchIndexOperation> SearchIndexOperations { get; set; }
         public DbSet<SearchIndexConfiguration> SearchIndexConfigurations { get; set; }
         public DbSet<LocalImportLog> LocalImportLogs { get; set; }
+        public DbSet<AiProviderSettings> AiProviderSettings { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -68,6 +69,11 @@ namespace TikTokArchive.Entities
             modelBuilder.Entity<Video>()
                 .HasIndex(v => new { v.AiSummaryStatus, v.AiSummaryLastAttempt });
 
+            // Supports the admin "re-queue everything a given provider enriched" query
+            // (WHERE AiSummaryProvider = ...).
+            modelBuilder.Entity<Video>()
+                .HasIndex(v => v.AiSummaryProvider);
+
             // SearchIndexOperation - created timestamp default
             modelBuilder.Entity<SearchIndexOperation>()
                 .Property(s => s.CreatedAt)
@@ -75,6 +81,11 @@ namespace TikTokArchive.Entities
 
             // SearchIndexConfiguration - last modified default
             modelBuilder.Entity<SearchIndexConfiguration>()
+                .Property(s => s.LastModified)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+
+            // AiProviderSettings - last modified default
+            modelBuilder.Entity<AiProviderSettings>()
                 .Property(s => s.LastModified)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
 
