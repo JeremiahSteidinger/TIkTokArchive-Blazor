@@ -1,11 +1,15 @@
 @page "/admin"
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.Options
 @using TikTokArchive.Entities
+@using TikTokArchive.Web.Options
 @using TikTokArchive.Web.Services
 @inject TikTokArchiveDbContext DbContext
 @inject ReindexCoordinator ReindexCoordinator
 @inject ITranscriptionService TranscriptionSvc
 @inject IAiEnrichmentService AiEnrichmentSvc
+@inject GeminiModelCatalogService GeminiModelCatalog
+@inject IOptions<AiEnrichmentOptions> AiEnrichmentOptionsAccessor
 @inject ISearchService SearchService
 @inject ToastService Toast
 @implements IDisposable
@@ -469,6 +473,96 @@ else if (activeTab == 2)
 
 else if (activeTab == 3)
 {
+    <!-- AI Provider -->
+    <div class="card mb-4">
+        <h2 class="mb-4 text-base font-semibold text-ink">AI Provider</h2>
+
+        <label class="label">Provider</label>
+        <div class="mb-4 flex flex-wrap gap-4">
+            <label class="inline-flex items-center gap-2 text-sm text-ink">
+                <input type="radio" name="aiProvider" checked="@(aiProvider == AiProvider.Local)"
+                       @onchange="@(() => aiProvider = AiProvider.Local)" />
+                Local model (Ollama)
+            </label>
+            <label class="inline-flex items-center gap-2 text-sm text-ink">
+                <input type="radio" name="aiProvider" checked="@(aiProvider == AiProvider.Gemini)"
+                       @onchange="@(() => aiProvider = AiProvider.Gemini)" />
+                Google Gemini
+            </label>
+        </div>
+
+        <label class="label" for="geminiApiKey">Gemini API key</label>
+        <input id="geminiApiKey" type="password" autocomplete="off" class="input mb-1"
+               placeholder="@(geminiApiKeyConfigured ? "•••••••••••••• (saved — leave blank to keep)" : "Enter Gemini API key")"
+               @bind="geminiApiKeyInput" @bind:event="oninput" />
+        <p class="mb-4 text-xs text-faint">
+            @(geminiApiKeyConfigured
+                ? "A key is already saved. Leave this blank to keep it, or enter a new one to replace it."
+                : "Required to use Gemini.")
+        </p>
+
+        <label class="label" for="geminiModel">Model</label>
+        <div class="mb-1 flex flex-wrap items-center gap-2">
+            <select id="geminiModel" class="input max-w-xs" @bind="selectedGeminiModel">
+                @if (geminiModels.Count == 0)
+                {
+                    <option value="@selectedGeminiModel">
+                        @(string.IsNullOrWhiteSpace(selectedGeminiModel) ? "Fetch models to choose one" : selectedGeminiModel)
+                    </option>
+                }
+                else
+                {
+                    @foreach (var model in geminiModels)
+                    {
+                        <option value="@model.Id">@model.DisplayName</option>
+                    }
+                }
+            </select>
+            <button type="button" class="btn btn-ghost" @onclick="FetchGeminiModels" disabled="@isFetchingGeminiModels">
+                @if (isFetchingGeminiModels)
+                {
+                    <span class="spinner size-4"></span>
+                }
+                else
+                {
+                    <Icon Name="refresh" Class="size-4" />
+                }
+                Fetch models
+            </button>
+        </div>
+        <p class="mb-4 text-xs text-faint">
+            Fetches the models available to the key above (or the saved key, if you haven't typed a new one).
+        </p>
+
+        <div class="mb-1 flex items-center justify-between">
+            <label class="label" for="systemPrompt">System prompt</label>
+            <button type="button" class="text-xs text-sky-600 hover:text-sky-500 dark:text-sky-400 dark:hover:text-sky-300"
+                    @onclick="ResetSystemPromptToDefault">
+                Reset to default
+            </button>
+        </div>
+        <textarea id="systemPrompt" rows="5" class="input mb-1 font-mono text-xs" @bind="systemPromptInput" @bind:event="oninput"></textarea>
+        <p class="mb-4 text-xs text-faint">
+            Sent as the instruction for every AI summary, on both providers. Must still ask for a JSON object
+            of the form <code>{"summary": string, "tags": string[]}</code> — the enrichment worker parses that shape.
+        </p>
+
+        <button class="btn btn-primary" @onclick="SaveAiProviderSettings" disabled="@isSavingAiProvider">
+            @if (isSavingAiProvider)
+            {
+                <span class="spinner size-4"></span>
+            }
+            Save Provider Settings
+        </button>
+
+        @if (aiProviderLastModified.HasValue)
+        {
+            <p class="mt-2 text-xs text-faint">
+                Last modified: @aiProviderLastModified.Value.ToLocalTime().ToString("g")
+            </p>
+        }
+    </div>
+
     <!-- AI Enrichment -->
     <div class="card">
         <div class="mb-4 flex flex-wrap items-center gap-2">
@@ -498,6 +592,39 @@ else if (activeTab == 3)
             </button>
         </div>
 
+        <div class="mb-5 rounded-lg border border-line p-3">
+            <p class="mb-2 text-xs font-medium uppercase tracking-wide text-muted">Re-run by provider</p>
+            <div class="flex flex-wrap items-center gap-2">
+                <button class="btn btn-ghost" @onclick="@(() => RequeueByProvider(AiProvider.Local))"
+                        disabled="@(aiRequeuingProvider || AiProviderCount(AiProvider.Local) == 0)">
+                    <Icon Name="refresh" Class="size-4" /> Re-queue Local results (@AiProviderCount(AiProvider.Local))
+                </button>
+
+                <select class="input max-w-xs" @bind="selectedRequeueGeminiModel"
+                        disabled="@(AiProviderCount(AiProvider.Gemini) == 0)">
+                    <option value="">All Gemini models (@AiProviderCount(AiProvider.Gemini))</option>
+                    @foreach (var (model, count) in geminiModelCounts.OrderByDescending(kv => kv.Value))
+                    {
+                        <option value="@model">@model (@count)</option>
+                    }
+                </select>
+                <button class="btn btn-ghost" @onclick="RequeueGeminiSelection"
+                        disabled="@(aiRequeuingProvider || AiProviderCount(AiProvider.Gemini) == 0)">
+                    <Icon Name="refresh" Class="size-4" /> Re-queue Gemini results
+                </button>
+
+                <button class="btn btn-ghost" @onclick="@(() => RequeueByProvider(null))"
+                        disabled="@(aiRequeuingProvider || AiProviderCount(null) == 0)"
+                        title="Videos summarized before provider tracking was added">
+                    <Icon Name="refresh" Class="size-4" /> Re-queue Unknown results (@AiProviderCount(null))
+                </button>
+            </div>
+            <p class="mt-2 text-xs text-faint">
+                Re-queued videos are re-enriched using whichever provider is selected above (currently
+                <strong>@(aiProvider == AiProvider.Gemini ? "Gemini" : "Local model")</strong>) when the worker next picks them up.
+            </p>
+        </div>
+
         <div class="mb-3 flex flex-wrap items-center gap-2">
             <span class="text-xs text-faint">Show:</span>
             @foreach (var filter in aiFilters)
@@ -523,6 +650,7 @@ else if (activeTab == 3)
                             <th class="px-3 py-2 font-medium">Video</th>
                             <th class="px-3 py-2 font-medium">Status</th>
                             <th class="px-3 py-2 font-medium">Summary</th>
+                            <th class="px-3 py-2 font-medium">Provider / Model</th>
                             <th class="px-3 py-2 font-medium">Retries</th>
                             <th class="px-3 py-2 font-medium">Last Attempt</th>
                             <th class="px-3 py-2 font-medium">Error</th>
@@ -548,6 +676,20 @@ else if (activeTab == 3)
                                     @if (!string.IsNullOrWhiteSpace(row.Summary))
                                     {
                                         <span class="line-clamp-2 max-w-xs text-xs text-muted">@row.Summary</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-faint">—</span>
+                                    }
+                                </td>
+                                <td class="px-3 py-2">
+                                    @if (row.Provider.HasValue || row.Status == AiSummaryStatus.Completed)
+                                    {
+                                        <span class="text-xs text-ink">@AiProviderLabel(row.Provider)</span>
+                                        @if (!string.IsNullOrWhiteSpace(row.Model))
+                                        {
+                                            <div class="text-[11px] text-faint">@row.Model</div>
+                                        }
                                     }
                                     else
                                     {
@@ -668,6 +810,17 @@ else if (activeTab == 3)
     private const int transcriptPageSize = 25;
     private bool transcriptRefreshing;
 
+    // AI Enrichment - provider settings
+    private AiProvider aiProvider = AiProvider.Local;
+    private string geminiApiKeyInput = string.Empty;
+    private bool geminiApiKeyConfigured = false;
+    private string? selectedGeminiModel;
+    private List<GeminiModelInfo> geminiModels = new();
+    private bool isFetchingGeminiModels = false;
+    private string systemPromptInput = string.Empty;
+    private DateTime? aiProviderLastModified;
+    private bool isSavingAiProvider = false;
+
     // AI Enrichment
     private static readonly (string Key, string Label)[] aiFilters =
     {
@@ -679,11 +832,16 @@ else if (activeTab == 3)
         ("notrequested", "Not requested"),
     };
     private Dictionary<AiSummaryStatus, int> aiCounts = new();
+    private Dictionary<AiProvider, int> aiProviderCounts = new();
+    private int aiUnknownProviderCount;
+    private Dictionary<string, int> geminiModelCounts = new();
+    private string selectedRequeueGeminiModel = string.Empty;
     private string aiFilter = "queue";
     private List<AiRow> aiVideos = new();
     private int aiPage = 1;
     private const int aiPageSize = 25;
     private bool aiRefreshing;
+    private bool aiRequeuingProvider;
 
     // Error dialog state (replaces MudBlazor's IDialogService)
     private bool showErrorDialog = false;
@@ -753,6 +911,128 @@ else if (activeTab == 3)
         await LoadLocalImportLog();
         await LoadTranscriptionData();
         await LoadAiEnrichmentData();
+        await LoadAiProviderSettings();
+    }
+
+    private async Task LoadAiProviderSettings()
+    {
+        try
+        {
+            var settings = await DbContext.AiProviderSettings.FirstOrDefaultAsync();
+            aiProvider = settings?.Provider ?? AiProvider.Local;
+            geminiApiKeyConfigured = !string.IsNullOrWhiteSpace(settings?.GeminiApiKey);
+            selectedGeminiModel = settings?.GeminiModel;
+            aiProviderLastModified = settings?.LastModified;
+            // Always shown in full (unlike the API key) — either the saved override, or the
+            // generated default so the admin can see exactly what's being sent and tweak from there.
+            systemPromptInput = string.IsNullOrWhiteSpace(settings?.SystemPrompt)
+                ? AiSummaryPromptHelper.BuildSystemPrompt(AiEnrichmentOptionsAccessor.Value)
+                : settings.SystemPrompt;
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error loading AI provider settings: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private void ResetSystemPromptToDefault()
+    {
+        systemPromptInput = AiSummaryPromptHelper.BuildSystemPrompt(AiEnrichmentOptionsAccessor.Value);
+    }
+
+    // Uses the freshly typed key when there is one, otherwise the saved key — read straight from
+    // the DB server-side (Blazor Server keeps @code on the server, so this never reaches the browser).
+    private async Task<string?> ResolveGeminiApiKeyAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(geminiApiKeyInput))
+        {
+            return geminiApiKeyInput.Trim();
+        }
+
+        var settings = await DbContext.AiProviderSettings.FirstOrDefaultAsync();
+        return settings?.GeminiApiKey;
+    }
+
+    private async Task FetchGeminiModels()
+    {
+        var apiKey = await ResolveGeminiApiKeyAsync();
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            Toast.Show("Enter a Gemini API key first", ToastSeverity.Warning);
+            return;
+        }
+
+        isFetchingGeminiModels = true;
+        try
+        {
+            geminiModels = (await GeminiModelCatalog.ListModelsAsync(apiKey)).ToList();
+            if (geminiModels.Count == 0)
+            {
+                Toast.Show("No usable Gemini models were returned for this key", ToastSeverity.Warning);
+            }
+            else
+            {
+                Toast.Show($"Found {geminiModels.Count} model(s)", ToastSeverity.Success);
+                if (selectedGeminiModel == null || geminiModels.All(m => m.Id != selectedGeminiModel))
+                {
+                    selectedGeminiModel = geminiModels[0].Id;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error fetching Gemini models: {ex.Message}", ToastSeverity.Error);
+        }
+        finally
+        {
+            isFetchingGeminiModels = false;
+        }
+    }
+
+    private async Task SaveAiProviderSettings()
+    {
+        if (aiProvider == AiProvider.Gemini && !geminiApiKeyConfigured && string.IsNullOrWhiteSpace(geminiApiKeyInput))
+        {
+            Toast.Show("Enter a Gemini API key before switching to Gemini", ToastSeverity.Warning);
+            return;
+        }
+
+        isSavingAiProvider = true;
+        try
+        {
+            var settings = await DbContext.AiProviderSettings.FirstOrDefaultAsync();
+            if (settings == null)
+            {
+                settings = new AiProviderSettings();
+                DbContext.AiProviderSettings.Add(settings);
+            }
+
+            settings.Provider = aiProvider;
+            if (!string.IsNullOrWhiteSpace(geminiApiKeyInput))
+            {
+                settings.GeminiApiKey = geminiApiKeyInput.Trim();
+            }
+            settings.GeminiModel = string.IsNullOrWhiteSpace(selectedGeminiModel) ? null : selectedGeminiModel;
+
+            // A blank textarea means "use the generated default", not "send an empty prompt".
+            var defaultPrompt = AiSummaryPromptHelper.BuildSystemPrompt(AiEnrichmentOptionsAccessor.Value);
+            settings.SystemPrompt = string.IsNullOrWhiteSpace(systemPromptInput) || systemPromptInput.Trim() == defaultPrompt
+                ? null
+                : systemPromptInput.Trim();
+
+            await DbContext.SaveChangesAsync();
+            geminiApiKeyInput = string.Empty;
+            Toast.Show("AI provider settings saved", ToastSeverity.Success);
+            await LoadAiProviderSettings();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error saving AI provider settings: {ex.Message}", ToastSeverity.Error);
+        }
+        finally
+        {
+            isSavingAiProvider = false;
+        }
     }
 
     private async Task LoadConfiguration()
@@ -1104,6 +1384,9 @@ else if (activeTab == 3)
         try
         {
             aiCounts = await AiEnrichmentSvc.GetStatusCountsAsync();
+            aiProviderCounts = await AiEnrichmentSvc.GetProviderCountsAsync();
+            aiUnknownProviderCount = await AiEnrichmentSvc.GetUnknownProviderCountAsync();
+            geminiModelCounts = await AiEnrichmentSvc.GetModelCountsAsync(AiProvider.Gemini);
 
             var query = aiFilter switch
             {
@@ -1128,7 +1411,9 @@ else if (activeTab == 3)
                     Summary = v.Summary,
                     RetryCount = v.AiSummaryRetryCount,
                     LastAttempt = v.AiSummaryLastAttempt,
-                    Error = v.AiSummaryErrorMessage
+                    Error = v.AiSummaryErrorMessage,
+                    Provider = v.AiSummaryProvider,
+                    Model = v.AiSummaryModel
                 })
                 .ToListAsync();
             aiPage = 1;
@@ -1224,6 +1509,72 @@ else if (activeTab == 3)
         }
     }
 
+    private int AiProviderCount(AiProvider? provider) =>
+        provider.HasValue
+            ? (aiProviderCounts.TryGetValue(provider.Value, out var c) ? c : 0)
+            : aiUnknownProviderCount;
+
+    private static string AiProviderLabel(AiProvider? provider) => provider switch
+    {
+        AiProvider.Local => "Local",
+        AiProvider.Gemini => "Gemini",
+        _ => "Unknown"
+    };
+
+    private async Task RequeueByProvider(AiProvider? provider)
+    {
+        if (aiRequeuingProvider) return;
+
+        aiRequeuingProvider = true;
+        try
+        {
+            var count = await AiEnrichmentSvc.RequeueByProviderAsync(provider);
+            Toast.Show($"Requeued {count} video(s) enriched by {AiProviderLabel(provider)}", ToastSeverity.Success);
+            await LoadAiEnrichmentData();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error requeuing {AiProviderLabel(provider)} videos: {ex.Message}", ToastSeverity.Error);
+        }
+        finally
+        {
+            aiRequeuingProvider = false;
+        }
+    }
+
+    private async Task RequeueGeminiSelection()
+    {
+        if (aiRequeuingProvider) return;
+
+        aiRequeuingProvider = true;
+        try
+        {
+            int count;
+            string label;
+            if (string.IsNullOrEmpty(selectedRequeueGeminiModel))
+            {
+                count = await AiEnrichmentSvc.RequeueByProviderAsync(AiProvider.Gemini);
+                label = "Gemini (all models)";
+            }
+            else
+            {
+                count = await AiEnrichmentSvc.RequeueByProviderModelAsync(AiProvider.Gemini, selectedRequeueGeminiModel);
+                label = $"Gemini · {selectedRequeueGeminiModel}";
+            }
+
+            Toast.Show($"Requeued {count} video(s) enriched by {label}", ToastSeverity.Success);
+            await LoadAiEnrichmentData();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error requeuing Gemini videos: {ex.Message}", ToastSeverity.Error);
+        }
+        finally
+        {
+            aiRequeuingProvider = false;
+        }
+    }
+
     private void ShowAiError(string videoId, string error)
     {
         errorDialogTitle = $"AI Enrichment Error — {videoId}";
@@ -1267,5 +1618,7 @@ else if (activeTab == 3)
         public int RetryCount { get; set; }
         public DateTime? LastAttempt { get; set; }
         public string? Error { get; set; }
+        public AiProvider? Provider { get; set; }
+        public string? Model { get; set; }
     }
 }

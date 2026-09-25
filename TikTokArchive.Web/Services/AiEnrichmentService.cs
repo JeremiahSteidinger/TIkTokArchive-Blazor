@@ -29,6 +29,37 @@ namespace TikTokArchive.Web.Services
 
         /// <summary>Move every <see cref="AiSummaryStatus.NotRequested"/> video to Pending (back-catalog backfill).</summary>
         Task<int> BackfillAsync(CancellationToken ct = default);
+
+        /// <summary>Count of videos whose current Summary was last produced by each <see cref="AiProvider"/> (regardless of its current status).</summary>
+        Task<Dictionary<AiProvider, int>> GetProviderCountsAsync(CancellationToken ct = default);
+
+        /// <summary>
+        /// Count of <see cref="AiSummaryStatus.Completed"/> videos with no recorded provider —
+        /// summarized before provider tracking existed, i.e. "Unknown". Kept separate from
+        /// <see cref="GetProviderCountsAsync"/> because Dictionary&lt;TKey,TValue&gt; disallows a
+        /// null key even when TKey is a nullable value type like AiProvider?.
+        /// </summary>
+        Task<int> GetUnknownProviderCountAsync(CancellationToken ct = default);
+
+        /// <summary>
+        /// Move every video whose current Summary was produced by the given provider back to
+        /// Pending, so it's re-enriched — under whichever provider is active in
+        /// <see cref="TikTokArchive.Entities.AiProviderSettings"/> when the worker picks it up.
+        /// A null provider means "Unknown" (Completed videos with no recorded provider); for a
+        /// known provider every matching video is included regardless of its current status, but
+        /// the null/Unknown bucket is restricted to Completed so it can't also sweep up videos that
+        /// were simply never enriched. Returns the count.
+        /// </summary>
+        Task<int> RequeueByProviderAsync(AiProvider? provider, CancellationToken ct = default);
+
+        /// <summary>Count of videos, grouped by the exact model id, whose current Summary was produced by the given provider.</summary>
+        Task<Dictionary<string, int>> GetModelCountsAsync(AiProvider provider, CancellationToken ct = default);
+
+        /// <summary>
+        /// Move every video whose current Summary was produced by the given provider+model back to
+        /// Pending (regardless of its current status), so it's re-enriched. Returns the count.
+        /// </summary>
+        Task<int> RequeueByProviderModelAsync(AiProvider provider, string model, CancellationToken ct = default);
     }
 
     public class AiEnrichmentService : IAiEnrichmentService
@@ -117,6 +148,8 @@ namespace TikTokArchive.Web.Services
 
             video.Summary = null;
             video.AiSummaryErrorMessage = null;
+            video.AiSummaryProvider = null;
+            video.AiSummaryModel = null;
             // Skipped (not NotRequested) so a back-catalog backfill won't re-enrich it.
             video.AiSummaryStatus = AiSummaryStatus.Skipped;
 
@@ -139,6 +172,87 @@ namespace TikTokArchive.Web.Services
 
         public Task<int> BackfillAsync(CancellationToken ct = default) =>
             ResetFromAsync(AiSummaryStatus.NotRequested, ct);
+
+        public async Task<Dictionary<AiProvider, int>> GetProviderCountsAsync(CancellationToken ct = default)
+        {
+            await using var _dbContext = await _dbContextFactory.CreateDbContextAsync(ct);
+            var counts = await _dbContext.Videos
+                .Where(v => v.AiSummaryProvider != null)
+                .GroupBy(v => v.AiSummaryProvider!.Value)
+                .Select(g => new { Provider = g.Key, Count = g.Count() })
+                .ToListAsync(ct);
+
+            var result = Enum.GetValues<AiProvider>().ToDictionary(p => p, _ => 0);
+            foreach (var c in counts)
+            {
+                result[c.Provider] = c.Count;
+            }
+
+            return result;
+        }
+
+        public async Task<int> GetUnknownProviderCountAsync(CancellationToken ct = default)
+        {
+            await using var _dbContext = await _dbContextFactory.CreateDbContextAsync(ct);
+            return await _dbContext.Videos
+                .CountAsync(v => v.AiSummaryProvider == null && v.AiSummaryStatus == AiSummaryStatus.Completed, ct);
+        }
+
+        public async Task<int> RequeueByProviderAsync(AiProvider? provider, CancellationToken ct = default)
+        {
+            await using var _dbContext = await _dbContextFactory.CreateDbContextAsync(ct);
+            var query = _dbContext.Videos.Where(v => v.AiSummaryProvider == provider);
+            if (provider == null)
+            {
+                // Null also matches videos that were simply never enriched; restrict "Unknown" to
+                // ones that actually have a summary from before provider tracking existed.
+                query = query.Where(v => v.AiSummaryStatus == AiSummaryStatus.Completed);
+            }
+
+            var affected = await query.ExecuteUpdateAsync(s => s
+                .SetProperty(v => v.AiSummaryStatus, AiSummaryStatus.Pending)
+                .SetProperty(v => v.AiSummaryRetryCount, 0)
+                .SetProperty(v => v.AiSummaryLastAttempt, (DateTime?)null)
+                .SetProperty(v => v.AiSummaryErrorMessage, (string?)null), ct);
+
+            if (affected > 0)
+            {
+                _signal.Notify();
+            }
+
+            return affected;
+        }
+
+        public async Task<Dictionary<string, int>> GetModelCountsAsync(AiProvider provider, CancellationToken ct = default)
+        {
+            await using var _dbContext = await _dbContextFactory.CreateDbContextAsync(ct);
+            var counts = await _dbContext.Videos
+                .Where(v => v.AiSummaryProvider == provider && v.AiSummaryModel != null)
+                .GroupBy(v => v.AiSummaryModel!)
+                .Select(g => new { Model = g.Key, Count = g.Count() })
+                .ToListAsync(ct);
+
+            return counts.ToDictionary(c => c.Model, c => c.Count);
+        }
+
+        public async Task<int> RequeueByProviderModelAsync(AiProvider provider, string model, CancellationToken ct = default)
+        {
+            await using var _dbContext = await _dbContextFactory.CreateDbContextAsync(ct);
+            var affected = await _dbContext.Videos
+                .Where(v => v.AiSummaryProvider == provider && v.AiSummaryModel == model)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(v => v.AiSummaryStatus, AiSummaryStatus.Pending)
+                    .SetProperty(v => v.AiSummaryRetryCount, 0)
+                    .SetProperty(v => v.AiSummaryLastAttempt, (DateTime?)null)
+                    .SetProperty(v => v.AiSummaryErrorMessage, (string?)null), ct);
+
+            if (affected > 0)
+            {
+                _signal.Notify();
+            }
+
+            return affected;
+        }
 
         private async Task<int> ResetFromAsync(AiSummaryStatus from, CancellationToken ct)
         {

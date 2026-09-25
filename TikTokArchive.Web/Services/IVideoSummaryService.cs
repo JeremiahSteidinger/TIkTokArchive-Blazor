@@ -1,3 +1,5 @@
+using TikTokArchive.Entities;
+
 namespace TikTokArchive.Web.Services
 {
     public enum SummaryOutcome
@@ -13,7 +15,15 @@ namespace TikTokArchive.Web.Services
     }
 
     /// <param name="Tags">Cleaned AI tags (lowercased, '#'-stripped, ≤100 chars, capped), or null.</param>
-    public record SummaryResult(SummaryOutcome Outcome, string? Summary, IReadOnlyList<string>? Tags, string? Error);
+    /// <param name="Provider">Which provider produced this result. Only meaningful when Outcome is Success.</param>
+    /// <param name="Model">The provider-specific model id used (e.g. "llama3.2:3b", "gemini-3.8-flash"). Only meaningful when Outcome is Success.</param>
+    public record SummaryResult(
+        SummaryOutcome Outcome,
+        string? Summary,
+        IReadOnlyList<string>? Tags,
+        string? Error,
+        AiProvider? Provider = null,
+        string? Model = null);
 
     /// <summary>
     /// Generates a short summary and a handful of topical tags for a video from its
