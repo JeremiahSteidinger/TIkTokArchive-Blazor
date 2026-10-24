@@ -44,6 +44,12 @@ Pending jobs are in-memory and do not survive a restart — acceptable for a sel
 
 The same pipeline backs the API: `POST /api/video?videoUrl=…` waits (up to 60 s) for the download and returns the real outcome — `200` archived, `422` failed with the reason, `202` still downloading — so simple callers like an iOS Shortcut get genuine success/failure feedback. Pass `wait=false` for fire-and-forget; either way the response includes a `jobId` that can be polled at `GET /api/video/ingest/{jobId}`.
 
+### Comments
+
+TikTok comments can be archived alongside a video. yt-dlp has no TikTok comment extractor, so `TikTokCommentClient` reads TikTok's web comment API directly (`/api/comment/list/` and `/api/comment/list/reply/`), sending the synced browser cookies from `YtDlp:CookiesFile` when present — TikTok often answers anonymous requests with an empty body. `CommentService` saves them to the `VideoComments` table (top-level comments plus their replies; deleted with the video).
+
+Settings live in the DB (`CommentDownloadSettings`, edited on the Admin page's **Comments** tab): whether to download automatically at ingest, how many top-level comments per video, how many replies per comment (0 = none), and the sort order (Top / Most liked / Newest / Oldest). TikTok's API has no sort parameter and always returns its own ranking, so any order other than Top reads a larger pool (5× the limit, at most 1,000) and keeps the best matches from it. Ingest-time downloads are best-effort and run after the job is marked complete, so they never fail or delay an archive. Each TikTok video card has a comments button that opens the saved comments and can (re-)download them; a re-download replaces the saved set atomically, and a failed one keeps the old comments. Instagram comments aren't supported yet.
+
 ### Configuration and operations
 
 - Media paths are bound from the `MediaStorage` configuration section (`MediaStorageOptions`), defaulting to `/media/videos` and `/media/thumbnails`.

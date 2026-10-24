@@ -1,0 +1,147 @@
+@* Modal overlay listing a video's downloaded comments, with a button to (re-)download them
+   using the current Admin → Comments settings. Mirrors TranscriptDialog. *@
+@using TikTokArchive.Entities
+@inject ICommentService CommentSvc
+@inject ToastService Toast
+
+<div class="fixed inset-0 z-[1050] flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" @onclick="OnCloseRequested"></div>
+    <div class="relative z-10 flex max-h-[80vh] w-full max-w-3xl flex-col rounded-xl border border-line bg-surface shadow-2xl">
+        <div class="flex items-center gap-2 border-b border-line px-5 py-3">
+            <Icon Name="chat-bubble" Class="size-5 shrink-0 text-sky-500" />
+            <h2 class="flex-1 truncate text-base font-semibold text-ink">@Title</h2>
+            <button class="icon-btn size-8" @onclick="OnCloseRequested" aria-label="Close">
+                <Icon Name="close" Class="size-4" />
+            </button>
+        </div>
+        @if (FetchedAt.HasValue && comments != null)
+        {
+            <div class="border-b border-line px-5 py-2 text-sm text-muted">
+                @comments.Count comment(s), @comments.Sum(c => c.Replies.Count) repl@(comments.Sum(c => c.Replies.Count) == 1 ? "y" : "ies")
+                · downloaded @FetchedAt.Value.ToLocalTime().ToString("g")
+            </div>
+        }
+        <div class="overflow-y-auto p-4">
+            @if (comments == null)
+            {
+                <div class="flex justify-center py-6"><span class="spinner size-6"></span></div>
+            }
+            else if (!FetchedAt.HasValue)
+            {
+                <p class="text-sm text-faint">Comments haven't been downloaded for this video yet.</p>
+            }
+            else if (comments.Count == 0)
+            {
+                <p class="text-sm text-faint">This video had no comments when they were downloaded.</p>
+            }
+            else
+            {
+                <ul class="flex flex-col gap-4">
+                    @foreach (var comment in comments)
+                    {
+                        <li>
+                            @CommentBody(comment)
+                            @if (comment.Replies.Count > 0 || comment.ReplyCount > 0)
+                            {
+                                <ul class="mt-2 ml-4 flex flex-col gap-2 border-l border-line pl-3">
+                                    @foreach (var reply in comment.Replies)
+                                    {
+                                        <li>@CommentBody(reply)</li>
+                                    }
+                                    @if (comment.ReplyCount > comment.Replies.Count)
+                                    {
+                                        <li class="text-xs text-faint">
+                                            @(comment.ReplyCount - comment.Replies.Count) more repl@(comment.ReplyCount - comment.Replies.Count == 1 ? "y" : "ies") not downloaded
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+        </div>
+        <div class="flex items-center justify-between border-t border-line px-5 py-3">
+            <button class="btn btn-ghost" @onclick="Download" disabled="@downloading">
+                @if (downloading)
+                {
+                    <span class="spinner size-4"></span>
+                }
+                else
+                {
+                    <Icon Name="@(FetchedAt.HasValue ? "refresh" : "download")" Class="size-4" />
+                }
+                @(FetchedAt.HasValue ? "Download again" : "Download comments")
+            </button>
+            <button class="btn btn-ghost" @onclick="OnCloseRequested">Close</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Comments";
+    [Parameter, EditorRequired] public string VideoId { get; set; } = default!;
+
+    /// <summary>When the video's comments were last downloaded; null if never.</summary>
+    [Parameter] public DateTime? FetchedAt { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    /// <summary>Raised after a successful download, so the card can update its own state.</summary>
+    [Parameter] public EventCallback OnDownloaded { get; set; }
+
+    private List<VideoComment>? comments;
+    private bool downloading;
+
+    protected override async Task OnInitializedAsync() => await LoadComments();
+
+    private async Task LoadComments()
+    {
+        try
+        {
+            comments = await CommentSvc.GetCommentsAsync(VideoId);
+        }
+        catch (Exception ex)
+        {
+            comments = new();
+            Toast.Show($"Error loading comments: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private async Task Download()
+    {
+        downloading = true;
+        try
+        {
+            var count = await CommentSvc.DownloadCommentsAsync(VideoId);
+            await OnDownloaded.InvokeAsync();
+            await LoadComments();
+            Toast.Show($"Downloaded {count} comment(s)", ToastSeverity.Success);
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error downloading comments: {ex.Message}", ToastSeverity.Error);
+        }
+        finally
+        {
+            downloading = false;
+        }
+    }
+
+    private Task OnCloseRequested() => OnClose.InvokeAsync();
+
+    private static RenderFragment CommentBody(VideoComment comment) => @<div>
+        <div class="flex flex-wrap items-baseline gap-x-2 text-xs">
+            <span class="font-semibold text-ink">@(string.IsNullOrWhiteSpace(comment.AuthorDisplayName) ? comment.AuthorUsername : comment.AuthorDisplayName)</span>
+            @if (!string.IsNullOrWhiteSpace(comment.AuthorUsername))
+            {
+                <span class="text-faint">@@@comment.AuthorUsername</span>
+            }
+            <span class="text-faint">@comment.CreatedAt.ToLocalTime().ToString("g")</span>
+            <span class="inline-flex items-center gap-0.5 text-faint" title="Likes">
+                <Icon Name="heart" Class="size-3" />@comment.LikeCount.ToString("N0")
+            </span>
+        </div>
+        <p class="mt-0.5 whitespace-pre-wrap break-words text-sm text-ink">@comment.Text</p>
+    </div>;
+}

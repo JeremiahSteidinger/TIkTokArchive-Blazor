@@ -1,11 +1,12 @@
 @* A single video card: player, creator, description, summary, tags and the
-   transcript / AI-enrichment / download / delete actions. Self-contained — it owns its
-   transcript dialog and talks to the services directly. The parent page only reacts to
+   transcript / AI-enrichment / comments / download / delete actions. Self-contained — it owns its
+   transcript and comments dialogs and talks to the services directly. The parent page only reacts to
    deletions (to fix paging), queued work (to keep status polling alive) and tag clicks. *@
 @using TikTokArchive.Entities
 @inject IVideoService VideoService
 @inject ITranscriptionService TranscriptionSvc
 @inject IAiEnrichmentService AiEnrichmentSvc
+@inject ICommentService CommentSvc
 @inject ToastService Toast
 @inject IJSRuntime JSRuntime
 
@@ -169,6 +170,14 @@
                     </button>
                     break;
             }
+            @if (CommentSvc.SupportsComments(Video.Platform))
+            {
+                <button class="@($"icon-btn {(Video.CommentsFetchedAt.HasValue ? "text-sky-500 hover:bg-sky-500/10" : "hover:bg-sky-500/10 hover:text-sky-500")}")"
+                        @onclick="@(() => showCommentsDialog = true)"
+                        title="@(Video.CommentsFetchedAt.HasValue ? "View comments" : "Download comments")">
+                    <Icon Name="chat-bubble" />
+                </button>
+            }
         </div>
         <button class="icon-btn hover:bg-rose-500/10 hover:text-rose-500"
                 @onclick="DeleteVideo" title="Delete video">
@@ -185,6 +194,15 @@
                       IsLowConfidence="@IsLowConfidence()"
                       OnClose="@(() => showTranscriptDialog = false)"
                       OnDelete="@DeleteTranscript" />
+}
+
+@if (showCommentsDialog)
+{
+    <CommentsDialog Title="@(string.IsNullOrWhiteSpace(Video.Creator?.DisplayName) ? "Comments" : $"Comments — {Video.Creator!.DisplayName}")"
+                    VideoId="@Video.TikTokVideoId"
+                    FetchedAt="@Video.CommentsFetchedAt"
+                    OnClose="@(() => showCommentsDialog = false)"
+                    OnDownloaded="@(() => Video.CommentsFetchedAt = DateTime.UtcNow)" />
 }
 
 @code {
@@ -207,6 +225,7 @@
 
     private bool showTranscriptDialog;
     private string transcriptDialogTitle = string.Empty;
+    private bool showCommentsDialog;
     private bool redownloading;
 
     /// <summary>Bumped after a re-download so the player refetches instead of using its cache.</summary>

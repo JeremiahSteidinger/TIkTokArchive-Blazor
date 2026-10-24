@@ -94,6 +94,13 @@ namespace TikTokArchive.Web
             builder.Services.AddSingleton<IYtDlpService, YtDlpService>();
             builder.Services.AddHostedService<VideoIngestBackgroundService>();
 
+            // Comments: read from TikTok's web API (yt-dlp has no TikTok comment extractor),
+            // either at ingest (when enabled in the admin-editable CommentDownloadSettings row) or
+            // on demand from a video card.
+            builder.Services.AddHttpClient(TikTokCommentClient.HttpClientName, TikTokCommentClient.ConfigureHttpClient);
+            builder.Services.AddSingleton<ITikTokCommentClient, TikTokCommentClient>();
+            builder.Services.AddScoped<ICommentService, CommentService>();
+
             // Local import: watches a drop folder and imports video files found there.
             builder.Services.AddHostedService<LocalImportBackgroundService>();
 

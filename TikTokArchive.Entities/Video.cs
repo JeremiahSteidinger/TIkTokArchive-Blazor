@@ -45,7 +45,12 @@ namespace TikTokArchive.Entities
         public AiProvider? AiSummaryProvider { get; set; }
         public string? AiSummaryModel { get; set; }
 
+        // Comments. Null CommentsFetchedAt means comments were never downloaded (as opposed to
+        // downloaded and the video had none).
+        public DateTime? CommentsFetchedAt { get; set; }
+
         public virtual Creator Creator { get; set; }
         public virtual IEnumerable<VideoTag> Tags { get; set; }
+        public virtual ICollection<VideoComment> Comments { get; set; } = new List<VideoComment>();
     }
 }
