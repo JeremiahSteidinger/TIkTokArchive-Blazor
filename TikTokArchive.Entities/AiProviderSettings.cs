@@ -27,6 +27,18 @@ namespace TikTokArchive.Entities
         /// </summary>
         public string? SystemPrompt { get; set; }
 
+        /// <summary>
+        /// Which engine transcribes video audio: Local is the Whisper ASR container, Gemini uses
+        /// <see cref="GeminiApiKey"/>. Independent of <see cref="Provider"/>.
+        /// </summary>
+        public AiProvider TranscriptionProvider { get; set; } = AiProvider.Local;
+
+        /// <summary>
+        /// Gemini model id used for transcription. Null falls back to <see cref="GeminiModel"/>
+        /// (and then to AiEnrichmentOptions.GeminiModel).
+        /// </summary>
+        public string? GeminiTranscriptionModel { get; set; }
+
         public DateTime LastModified { get; set; }
     }
 }

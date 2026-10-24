@@ -179,7 +179,8 @@ namespace TikTokArchive.Web.Services
                         break;
 
                     case TranscriptionOutcome.NotFound:
-                        // The file is gone; don't retry forever.
+                    case TranscriptionOutcome.Rejected:
+                        // The file is gone, or the engine refused it; don't retry forever.
                         video.TranscriptStatus = TranscriptStatus.Skipped;
                         video.TranscriptConfidence = null;
                         video.TranscriptErrorMessage = result.Error;

@@ -547,6 +547,43 @@ else if (activeTab == 3)
             of the form <code>{"summary": string, "tags": string[]}</code> — the enrichment worker parses that shape.
         </p>
 
+        <label class="label">Transcription engine</label>
+        <div class="mb-4 flex flex-wrap gap-4">
+            <label class="inline-flex items-center gap-2 text-sm text-ink">
+                <input type="radio" name="transcriptionProvider" checked="@(transcriptionProvider == AiProvider.Local)"
+                       @onchange="@(() => transcriptionProvider = AiProvider.Local)" />
+                Local model (Whisper)
+            </label>
+            <label class="inline-flex items-center gap-2 text-sm text-ink">
+                <input type="radio" name="transcriptionProvider" checked="@(transcriptionProvider == AiProvider.Gemini)"
+                       @onchange="@(() => transcriptionProvider = AiProvider.Gemini)" />
+                Google Gemini
+            </label>
+        </div>
+
+        <label class="label" for="geminiTranscriptionModel">Transcription model</label>
+        <select id="geminiTranscriptionModel" class="input mb-1 max-w-xs" @bind="selectedGeminiTranscriptionModel">
+            <option value="">Same as the model above</option>
+            @if (geminiModels.Count == 0)
+            {
+                @if (!string.IsNullOrWhiteSpace(selectedGeminiTranscriptionModel))
+                {
+                    <option value="@selectedGeminiTranscriptionModel">@selectedGeminiTranscriptionModel</option>
+                }
+            }
+            else
+            {
+                @foreach (var model in geminiModels)
+                {
+                    <option value="@model.Id">@model.DisplayName</option>
+                }
+            }
+        </select>
+        <p class="mb-4 text-xs text-faint">
+            Used when the transcription engine is Gemini (fetch models above to choose a different one). The whole video
+            is uploaded to Gemini for each transcription, and Gemini transcripts have no confidence score.
+        </p>
+
         <button class="btn btn-primary" @onclick="SaveAiProviderSettings" disabled="@isSavingAiProvider">
             @if (isSavingAiProvider)
             {
@@ -818,6 +855,8 @@ else if (activeTab == 3)
     private List<GeminiModelInfo> geminiModels = new();
     private bool isFetchingGeminiModels = false;
     private string systemPromptInput = string.Empty;
+    private AiProvider transcriptionProvider = AiProvider.Local;
+    private string selectedGeminiTranscriptionModel = string.Empty;
     private DateTime? aiProviderLastModified;
     private bool isSavingAiProvider = false;
 
@@ -922,6 +961,8 @@ else if (activeTab == 3)
             aiProvider = settings?.Provider ?? AiProvider.Local;
             geminiApiKeyConfigured = !string.IsNullOrWhiteSpace(settings?.GeminiApiKey);
             selectedGeminiModel = settings?.GeminiModel;
+            transcriptionProvider = settings?.TranscriptionProvider ?? AiProvider.Local;
+            selectedGeminiTranscriptionModel = settings?.GeminiTranscriptionModel ?? string.Empty;
             aiProviderLastModified = settings?.LastModified;
             // Always shown in full (unlike the API key) — either the saved override, or the
             // generated default so the admin can see exactly what's being sent and tweak from there.
@@ -991,7 +1032,8 @@ else if (activeTab == 3)
 
     private async Task SaveAiProviderSettings()
     {
-        if (aiProvider == AiProvider.Gemini && !geminiApiKeyConfigured && string.IsNullOrWhiteSpace(geminiApiKeyInput))
+        if ((aiProvider == AiProvider.Gemini || transcriptionProvider == AiProvider.Gemini)
+            && !geminiApiKeyConfigured && string.IsNullOrWhiteSpace(geminiApiKeyInput))
         {
             Toast.Show("Enter a Gemini API key before switching to Gemini", ToastSeverity.Warning);
             return;
@@ -1013,6 +1055,8 @@ else if (activeTab == 3)
                 settings.GeminiApiKey = geminiApiKeyInput.Trim();
             }
             settings.GeminiModel = string.IsNullOrWhiteSpace(selectedGeminiModel) ? null : selectedGeminiModel;
+            settings.TranscriptionProvider = transcriptionProvider;
+            settings.GeminiTranscriptionModel = string.IsNullOrWhiteSpace(selectedGeminiTranscriptionModel) ? null : selectedGeminiTranscriptionModel;
 
             // A blank textarea means "use the generated default", not "send an empty prompt".
             var defaultPrompt = AiSummaryPromptHelper.BuildSystemPrompt(AiEnrichmentOptionsAccessor.Value);

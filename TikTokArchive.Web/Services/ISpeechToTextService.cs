@@ -11,6 +11,9 @@ namespace TikTokArchive.Web.Services
         /// <summary>The video file could not be found on disk.</summary>
         NotFound,
 
+        /// <summary>The engine refused the content (e.g. a safety block) — terminal, retrying won't help.</summary>
+        Rejected,
+
         /// <summary>A transient error (service down, timeout, non-2xx) — caller should retry.</summary>
         Error
     }
