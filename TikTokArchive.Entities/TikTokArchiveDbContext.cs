@@ -12,6 +12,8 @@ namespace TikTokArchive.Entities
         public DbSet<SearchIndexConfiguration> SearchIndexConfigurations { get; set; }
         public DbSet<LocalImportLog> LocalImportLogs { get; set; }
         public DbSet<AiProviderSettings> AiProviderSettings { get; set; }
+        public DbSet<VideoComment> VideoComments { get; set; }
+        public DbSet<CommentDownloadSettings> CommentDownloadSettings { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -33,6 +35,25 @@ namespace TikTokArchive.Entities
                 .WithOne(vt => vt.Tag)
                 .HasForeignKey(vt => vt.TagId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Video -> VideoComments (one-to-many); deleting a video deletes its comments.
+            modelBuilder.Entity<Video>()
+                .HasMany(v => v.Comments)
+                .WithOne(c => c.Video)
+                .HasForeignKey(c => c.VideoId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Root comment -> replies; replies go with their root.
+            modelBuilder.Entity<VideoComment>()
+                .HasMany(c => c.Replies)
+                .WithOne(c => c.Parent)
+                .HasForeignKey(c => c.ParentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Comments can run long (and contain emoji), so TEXT rather than a VARCHAR.
+            modelBuilder.Entity<VideoComment>()
+                .Property(c => c.Text)
+                .HasColumnType("TEXT");
 
             // Unique constraint on tag name
             modelBuilder.Entity<Tag>()
@@ -86,6 +107,11 @@ namespace TikTokArchive.Entities
 
             // AiProviderSettings - last modified default
             modelBuilder.Entity<AiProviderSettings>()
+                .Property(s => s.LastModified)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+
+            // CommentDownloadSettings - last modified default
+            modelBuilder.Entity<CommentDownloadSettings>()
                 .Property(s => s.LastModified)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
 

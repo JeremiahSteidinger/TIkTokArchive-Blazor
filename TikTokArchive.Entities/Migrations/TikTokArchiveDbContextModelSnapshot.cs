@@ -52,6 +52,36 @@ namespace TikTokArchive.Entities.Migrations
                     b.ToTable("AiProviderSettings");
                 });
 
+            modelBuilder.Entity("TikTokArchive.Entities.CommentDownloadSettings", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<bool>("DownloadOnIngest")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime>("LastModified")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime(6)")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+
+                    b.Property<int>("MaxRepliesPerComment")
+                        .HasColumnType("int");
+
+                    b.Property<int>("MaxRootComments")
+                        .HasColumnType("int");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("CommentDownloadSettings");
+                });
+
             modelBuilder.Entity("TikTokArchive.Entities.Creator", b =>
                 {
                     b.Property<int>("Id")
@@ -220,6 +250,9 @@ namespace TikTokArchive.Entities.Migrations
                     b.Property<int>("AiSummaryStatus")
                         .HasColumnType("int");
 
+                    b.Property<DateTime?>("CommentsFetchedAt")
+                        .HasColumnType("datetime(6)");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)");
 
@@ -274,6 +307,57 @@ namespace TikTokArchive.Entities.Migrations
                     b.ToTable("Videos");
                 });
 
+            modelBuilder.Entity("TikTokArchive.Entities.VideoComment", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("AuthorDisplayName")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("AuthorUsername")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("LikeCount")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ParentId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("PlatformCommentId")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ReplyCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("VideoId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ParentId");
+
+                    b.HasIndex("VideoId");
+
+                    b.ToTable("VideoComments");
+                });
+
             modelBuilder.Entity("TikTokArchive.Entities.VideoTag", b =>
                 {
                     b.Property<int>("Id")
@@ -312,6 +396,24 @@ namespace TikTokArchive.Entities.Migrations
                     b.Navigation("Creator");
                 });
 
+            modelBuilder.Entity("TikTokArchive.Entities.VideoComment", b =>
+                {
+                    b.HasOne("TikTokArchive.Entities.VideoComment", "Parent")
+                        .WithMany("Replies")
+                        .HasForeignKey("ParentId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("TikTokArchive.Entities.Video", "Video")
+                        .WithMany("Comments")
+                        .HasForeignKey("VideoId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Parent");
+
+                    b.Navigation("Video");
+                });
+
             modelBuilder.Entity("TikTokArchive.Entities.VideoTag", b =>
                 {
                     b.HasOne("TikTokArchive.Entities.Tag", "Tag")
@@ -343,7 +445,14 @@ namespace TikTokArchive.Entities.Migrations
 
             modelBuilder.Entity("TikTokArchive.Entities.Video", b =>
                 {
+                    b.Navigation("Comments");
+
                     b.Navigation("Tags");
+                });
+
+            modelBuilder.Entity("TikTokArchive.Entities.VideoComment", b =>
+                {
+                    b.Navigation("Replies");
                 });
 #pragma warning restore 612, 618
         }

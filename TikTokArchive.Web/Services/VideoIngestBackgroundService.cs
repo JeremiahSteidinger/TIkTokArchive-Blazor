@@ -137,6 +137,9 @@ namespace TikTokArchive.Web.Services
 
                 job.MarkCompleted();
                 _logger.LogInformation("Video {VideoId} added successfully", metadata.VideoId);
+
+                // After MarkCompleted so callers waiting on the job aren't held up by comments.
+                await DownloadCommentsAsync(scope.ServiceProvider, job.Platform, metadata.VideoId, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -228,6 +231,34 @@ namespace TikTokArchive.Web.Services
                 {
                     _logger.LogWarning(ex, "Failed to delete media file {File}", path);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Downloads the new video's comments when the admin has enabled it. Best-effort, like the
+        /// thumbnail: the video is already saved, so a failure here is logged and nothing more —
+        /// the comments can be fetched again from the video card.
+        /// </summary>
+        private async Task DownloadCommentsAsync(
+            IServiceProvider services, Platform platform, string videoId, CancellationToken cancellationToken)
+        {
+            var comments = services.GetRequiredService<ICommentService>();
+            if (!comments.SupportsComments(platform)) return;
+
+            try
+            {
+                if (!(await comments.GetSettingsAsync(cancellationToken)).DownloadOnIngest) return;
+
+                _monitor.UpdateStep("ingest", "Downloading comments");
+                await comments.DownloadCommentsAsync(videoId, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Shutting down; the job itself already completed.
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to download comments for {VideoId}", videoId);
             }
         }
 

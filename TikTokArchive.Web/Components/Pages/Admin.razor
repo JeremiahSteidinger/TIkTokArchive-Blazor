@@ -23,6 +23,7 @@
     <button class="@TabClass(1)" @onclick="@(() => activeTab = 1)">Local Import</button>
     <button class="@TabClass(2)" @onclick="@(() => activeTab = 2)">Transcription</button>
     <button class="@TabClass(3)" @onclick="@(() => activeTab = 3)">AI Enrichment</button>
+    <button class="@TabClass(4)" @onclick="@(() => activeTab = 4)">Comments</button>
 </div>
 
 @if (activeTab == 0)
@@ -750,6 +751,58 @@ else if (activeTab == 3)
     </div>
 }
 
+else if (activeTab == 4)
+{
+    <div class="card max-w-2xl">
+        <h2 class="mb-4 text-base font-semibold text-ink">Comment Downloads</h2>
+
+        <label class="mb-4 inline-flex items-center gap-2 text-sm text-ink">
+            <input type="checkbox" @bind="commentsDownloadOnIngest" />
+            Download comments automatically when a TikTok video is archived
+        </label>
+        <p class="-mt-3 mb-4 text-xs text-faint">
+            Comments can also be downloaded (or re-downloaded) for any TikTok video from the comments button on its card.
+            Re-downloading replaces the saved comments using the settings below.
+        </p>
+
+        <label class="label" for="maxRootComments">Top-level comments per video</label>
+        <input id="maxRootComments" type="number" min="1" max="@CommentService.MaxRootCommentsLimit" class="input mb-4 max-w-xs"
+               @bind="commentsMaxRoot" />
+
+        <label class="label" for="maxReplies">Replies per comment</label>
+        <input id="maxReplies" type="number" min="0" max="@CommentService.MaxRepliesPerCommentLimit" class="input mb-1 max-w-xs"
+               @bind="commentsMaxReplies" />
+        <p class="mb-4 text-xs text-faint">0 skips replies. Each comment with replies costs one extra request to TikTok.</p>
+
+        <label class="label" for="commentSort">Sort order</label>
+        <select id="commentSort" class="input mb-1 max-w-xs" @bind="commentsSortOrder">
+            <option value="@CommentSortOrder.Top">Top (TikTok's ranking)</option>
+            <option value="@CommentSortOrder.MostLiked">Most liked</option>
+            <option value="@CommentSortOrder.Newest">Newest first</option>
+            <option value="@CommentSortOrder.Oldest">Oldest first</option>
+        </select>
+        <p class="mb-4 text-xs text-faint">
+            Applies to top-level comments and to the replies under each one. TikTok can't sort comments itself,
+            so any order other than Top reads up to five times as many comments (at most 1,000) and keeps the best matches.
+        </p>
+
+        <button class="btn btn-primary" @onclick="SaveCommentSettings" disabled="@isSavingCommentSettings">
+            @if (isSavingCommentSettings)
+            {
+                <span class="spinner size-4"></span>
+            }
+            Save Comment Settings
+        </button>
+
+        @if (commentSettingsLastModified.HasValue)
+        {
+            <p class="mt-2 text-xs text-faint">
+                Last modified: @commentSettingsLastModified.Value.ToLocalTime().ToString("g")
+            </p>
+        }
+    </div>
+}
+
 @if (showErrorDialog)
 {
     <ImportErrorDialog Title="@errorDialogTitle"
@@ -820,6 +873,14 @@ else if (activeTab == 3)
     private string systemPromptInput = string.Empty;
     private DateTime? aiProviderLastModified;
     private bool isSavingAiProvider = false;
+
+    // Comments
+    private bool commentsDownloadOnIngest;
+    private int commentsMaxRoot = 50;
+    private int commentsMaxReplies = 5;
+    private CommentSortOrder commentsSortOrder = CommentSortOrder.Top;
+    private DateTime? commentSettingsLastModified;
+    private bool isSavingCommentSettings;
 
     // AI Enrichment
     private static readonly (string Key, string Label)[] aiFilters =
@@ -912,6 +973,66 @@ else if (activeTab == 3)
         await LoadTranscriptionData();
         await LoadAiEnrichmentData();
         await LoadAiProviderSettings();
+        await LoadCommentSettings();
+    }
+
+    private async Task LoadCommentSettings()
+    {
+        try
+        {
+            var settings = await DbContext.CommentDownloadSettings.FirstOrDefaultAsync() ?? new CommentDownloadSettings();
+            commentsDownloadOnIngest = settings.DownloadOnIngest;
+            commentsMaxRoot = settings.MaxRootComments;
+            commentsMaxReplies = settings.MaxRepliesPerComment;
+            commentsSortOrder = settings.SortOrder;
+            commentSettingsLastModified = settings.Id == 0 ? null : settings.LastModified;
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error loading comment settings: {ex.Message}", ToastSeverity.Error);
+        }
+    }
+
+    private async Task SaveCommentSettings()
+    {
+        if (commentsMaxRoot < 1 || commentsMaxRoot > CommentService.MaxRootCommentsLimit)
+        {
+            Toast.Show($"Top-level comments must be between 1 and {CommentService.MaxRootCommentsLimit}", ToastSeverity.Warning);
+            return;
+        }
+        if (commentsMaxReplies < 0 || commentsMaxReplies > CommentService.MaxRepliesPerCommentLimit)
+        {
+            Toast.Show($"Replies per comment must be between 0 and {CommentService.MaxRepliesPerCommentLimit}", ToastSeverity.Warning);
+            return;
+        }
+
+        isSavingCommentSettings = true;
+        try
+        {
+            var settings = await DbContext.CommentDownloadSettings.FirstOrDefaultAsync();
+            if (settings == null)
+            {
+                settings = new CommentDownloadSettings();
+                DbContext.CommentDownloadSettings.Add(settings);
+            }
+
+            settings.DownloadOnIngest = commentsDownloadOnIngest;
+            settings.MaxRootComments = commentsMaxRoot;
+            settings.MaxRepliesPerComment = commentsMaxReplies;
+            settings.SortOrder = commentsSortOrder;
+
+            await DbContext.SaveChangesAsync();
+            Toast.Show("Comment settings saved", ToastSeverity.Success);
+            await LoadCommentSettings();
+        }
+        catch (Exception ex)
+        {
+            Toast.Show($"Error saving comment settings: {ex.Message}", ToastSeverity.Error);
+        }
+        finally
+        {
+            isSavingCommentSettings = false;
+        }
     }
 
     private async Task LoadAiProviderSettings()
