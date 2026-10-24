@@ -69,7 +69,7 @@ namespace TikTokArchive.Web.Services
             {
                 SystemInstruction = new GeminiContent { Parts = [new GeminiPart { Text = AiSummaryPromptHelper.ResolveSystemPrompt(_options, settings?.SystemPrompt) }] },
                 Contents = [new GeminiContent { Parts = [new GeminiPart { Text = userContent }] }],
-                GenerationConfig = new GeminiGenerationConfig { Temperature = 0.2, ResponseMimeType = "application/json" }
+                GenerationConfig = new GeminiGenerationConfig { ResponseMimeType = "application/json" }
             };
 
             try
@@ -164,7 +164,6 @@ namespace TikTokArchive.Web.Services
 
         private sealed class GeminiGenerationConfig
         {
-            [JsonPropertyName("temperature")] public double Temperature { get; set; }
             [JsonPropertyName("responseMimeType")] public string ResponseMimeType { get; set; } = "application/json";
         }
 

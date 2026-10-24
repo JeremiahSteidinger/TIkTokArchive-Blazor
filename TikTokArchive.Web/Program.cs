@@ -117,7 +117,12 @@ namespace TikTokArchive.Web
                     // Transcription takes minutes, not the default 100 seconds.
                     client.Timeout = TimeSpan.FromMinutes(options.TimeoutMinutes);
                 });
-                builder.Services.AddSingleton<ISpeechToTextService, WhisperAsrSpeechToTextService>();
+                // Both engines are registered as themselves (scoped, since Gemini reads its API
+                // key from the scoped DbContext) and the router picks the active one from the
+                // DB-backed AiProviderSettings row on every call.
+                builder.Services.AddScoped<WhisperAsrSpeechToTextService>();
+                builder.Services.AddScoped<GeminiSpeechToTextService>();
+                builder.Services.AddScoped<ISpeechToTextService, SpeechToTextProviderRouter>();
                 builder.Services.AddHostedService<TranscriptionBackgroundService>();
             }
 
@@ -182,7 +187,7 @@ namespace TikTokArchive.Web
             var monitor = app.Services.GetRequiredService<BackgroundTaskMonitor>();
             monitor.Register("ingest", "Video Download", "Downloads TikTok and Instagram videos via yt-dlp.", enabled: true);
             monitor.Register("local-import", "Local Import", "Imports video files dropped into the watch folder.", enabled: true);
-            monitor.Register("transcription", "Transcription", "Transcribes video audio to text via Whisper.",
+            monitor.Register("transcription", "Transcription", "Transcribes video audio to text via Whisper or Gemini.",
                 enabled: builder.Configuration.GetValue<bool>("SpeechToText:Enabled"));
             monitor.Register("ai-enrichment", "AI Enrichment", "Generates summaries and tags via a local LLM or Gemini.",
                 enabled: builder.Configuration.GetValue<bool>("AiEnrichment:Enabled"));

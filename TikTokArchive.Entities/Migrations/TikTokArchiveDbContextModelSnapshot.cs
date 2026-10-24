@@ -36,6 +36,9 @@ namespace TikTokArchive.Entities.Migrations
                     b.Property<string>("GeminiModel")
                         .HasColumnType("longtext");
 
+                    b.Property<string>("GeminiTranscriptionModel")
+                        .HasColumnType("longtext");
+
                     b.Property<DateTime>("LastModified")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime(6)")
@@ -46,6 +49,9 @@ namespace TikTokArchive.Entities.Migrations
 
                     b.Property<string>("SystemPrompt")
                         .HasColumnType("longtext");
+
+                    b.Property<int>("TranscriptionProvider")
+                        .HasColumnType("int");
 
                     b.HasKey("Id");
 
