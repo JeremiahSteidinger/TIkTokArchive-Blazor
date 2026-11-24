@@ -1,4 +1,3 @@
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -10,10 +9,12 @@ using TikTokArchive.Web.Options;
 namespace TikTokArchive.Web.Services
 {
     /// <summary>
-    /// Speech-to-text backed by the Google Gemini API. This app has no ffmpeg, so — like
-    /// <see cref="WhisperAsrSpeechToTextService"/> — the raw video file is sent as-is: it's
+    /// Speech-to-text backed by a general Gemini model. Like
+    /// <see cref="WhisperAsrSpeechToTextService"/>, the raw video file is sent as-is: it's
     /// streamed to the Gemini Files API (inline base64 requests are size-capped), referenced by
     /// URI from one generateContent call that returns the transcript as JSON, then deleted.
+    /// Sending video costs video tokens; <see cref="GeminiTranscribeSpeechToTextService"/> is the
+    /// cheaper audio-only alternative.
     /// Gemini reports no per-segment log-probability, so the confidence is always null. The API
     /// key and model come from the DB-backed <see cref="AiProviderSettings"/> row, shared with
     /// <see cref="GeminiVideoSummaryService"/>.
@@ -24,9 +25,6 @@ namespace TikTokArchive.Web.Services
         {
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
-
-        private static readonly TimeSpan FilePollInterval = TimeSpan.FromSeconds(2);
-        private static readonly TimeSpan FileProcessingTimeout = TimeSpan.FromMinutes(5);
 
         // Transcribing someone else's speech shouldn't be refused for its content; anything Gemini
         // still blocks surfaces as TranscriptionOutcome.Rejected.
@@ -86,15 +84,11 @@ namespace TikTokArchive.Web.Services
                 : _aiOptions.GeminiModel;
 
             var client = _httpClientFactory.CreateClient(GeminiVideoSummaryService.HttpClientName);
-            string? fileName = null;
+            GeminiUploadedFile? file = null;
 
             try
             {
-                var mimeType = MimeTypeFor(videoFilePath);
-                var file = await UploadAsync(client, apiKey, videoFilePath, mimeType, ct);
-                fileName = file.Name;
-
-                file = await WaitUntilActiveAsync(client, apiKey, file, ct);
+                file = await GeminiFilesApi.UploadAsync(client, apiKey, videoFilePath, MimeTypeFor(videoFilePath), _logger, ct);
 
                 var request = new GeminiRequest
                 {
@@ -104,7 +98,7 @@ namespace TikTokArchive.Web.Services
                         {
                             Parts =
                             [
-                                new GeminiPart { FileData = new GeminiFileData { MimeType = file.MimeType ?? mimeType, FileUri = file.Uri } },
+                                new GeminiPart { FileData = new GeminiFileData { MimeType = file.MimeType, FileUri = file.Uri } },
                                 new GeminiPart { Text = BuildPrompt() }
                             ]
                         }
@@ -148,9 +142,9 @@ namespace TikTokArchive.Web.Services
             }
             finally
             {
-                if (fileName != null)
+                if (file != null)
                 {
-                    await DeleteFileAsync(client, apiKey, fileName);
+                    await GeminiFilesApi.DeleteAsync(client, apiKey, file.Name, _logger);
                 }
             }
         }
@@ -166,126 +160,6 @@ namespace TikTokArchive.Web.Services
                  + "no on-screen text, no timestamps and no speaker labels. "
                  + "Respond with a JSON object of the form {\"hasSpeech\": boolean, \"transcript\": string}. "
                  + "If nothing is spoken, return {\"hasSpeech\": false, \"transcript\": \"\"}.";
-        }
-
-        // Resumable upload: a "start" request returns the session URL, then the bytes are streamed
-        // (not buffered) in a single "upload, finalize" request.
-        private async Task<GeminiFile> UploadAsync(
-            HttpClient client, string apiKey, string videoFilePath, string mimeType, CancellationToken ct)
-        {
-            var length = new FileInfo(videoFilePath).Length;
-
-            using var startRequest = new HttpRequestMessage(HttpMethod.Post, "upload/v1beta/files")
-            {
-                Content = new StringContent(
-                    JsonSerializer.Serialize(
-                        new GeminiFileEnvelope { File = new GeminiFile { DisplayName = Path.GetFileName(videoFilePath) } },
-                        SerializerOptions),
-                    Encoding.UTF8, "application/json")
-            };
-            startRequest.Headers.Add("x-goog-api-key", apiKey);
-            startRequest.Headers.Add("X-Goog-Upload-Protocol", "resumable");
-            startRequest.Headers.Add("X-Goog-Upload-Command", "start");
-            startRequest.Headers.Add("X-Goog-Upload-Header-Content-Length", length.ToString());
-            startRequest.Headers.Add("X-Goog-Upload-Header-Content-Type", mimeType);
-
-            using var startResponse = await client.SendAsync(startRequest, ct);
-            if (!startResponse.IsSuccessStatusCode)
-            {
-                var startBody = await startResponse.Content.ReadAsStringAsync(ct);
-                _logger.LogWarning("Gemini upload start failed with {StatusCode}: {Body}", startResponse.StatusCode, startBody);
-                throw new InvalidOperationException($"Gemini upload start returned {(int)startResponse.StatusCode}");
-            }
-
-            if (!startResponse.Headers.TryGetValues("X-Goog-Upload-URL", out var urls)
-                || urls.FirstOrDefault() is not { Length: > 0 } uploadUrl)
-            {
-                throw new InvalidOperationException("Gemini upload start returned no upload URL");
-            }
-
-            await using var fileStream = File.OpenRead(videoFilePath);
-            using var fileContent = new StreamContent(fileStream);
-            fileContent.Headers.ContentType = new MediaTypeHeaderValue(mimeType);
-            fileContent.Headers.ContentLength = length;
-
-            using var uploadRequest = new HttpRequestMessage(HttpMethod.Post, uploadUrl) { Content = fileContent };
-            uploadRequest.Headers.Add("x-goog-api-key", apiKey);
-            uploadRequest.Headers.Add("X-Goog-Upload-Offset", "0");
-            uploadRequest.Headers.Add("X-Goog-Upload-Command", "upload, finalize");
-
-            using var uploadResponse = await client.SendAsync(uploadRequest, ct);
-            var body = await uploadResponse.Content.ReadAsStringAsync(ct);
-            if (!uploadResponse.IsSuccessStatusCode)
-            {
-                _logger.LogWarning("Gemini upload failed with {StatusCode}: {Body}", uploadResponse.StatusCode, body);
-                throw new InvalidOperationException($"Gemini upload returned {(int)uploadResponse.StatusCode}");
-            }
-
-            var file = JsonSerializer.Deserialize<GeminiFileEnvelope>(body, SerializerOptions)?.File;
-            if (string.IsNullOrWhiteSpace(file?.Name) || string.IsNullOrWhiteSpace(file.Uri))
-            {
-                throw new InvalidOperationException("Gemini upload returned no file");
-            }
-
-            return file;
-        }
-
-        // Uploaded video is PROCESSING for a few seconds before it can be referenced.
-        private async Task<GeminiFile> WaitUntilActiveAsync(
-            HttpClient client, string apiKey, GeminiFile file, CancellationToken ct)
-        {
-            var deadline = DateTime.UtcNow + FileProcessingTimeout;
-
-            while (true)
-            {
-                if (file.State == "ACTIVE") return file;
-                if (file.State == "FAILED")
-                {
-                    throw new InvalidOperationException("Gemini could not process the video file");
-                }
-                if (DateTime.UtcNow >= deadline)
-                {
-                    throw new TimeoutException("Timed out waiting for Gemini to process the video file");
-                }
-
-                await Task.Delay(FilePollInterval, ct);
-
-                using var request = new HttpRequestMessage(HttpMethod.Get, $"v1beta/{file.Name}");
-                request.Headers.Add("x-goog-api-key", apiKey);
-
-                using var response = await client.SendAsync(request, ct);
-                var body = await response.Content.ReadAsStringAsync(ct);
-                if (!response.IsSuccessStatusCode)
-                {
-                    _logger.LogWarning("Gemini file status failed with {StatusCode}: {Body}", response.StatusCode, body);
-                    throw new InvalidOperationException($"Gemini file status returned {(int)response.StatusCode}");
-                }
-
-                file = JsonSerializer.Deserialize<GeminiFile>(body, SerializerOptions)
-                    ?? throw new InvalidOperationException("Gemini returned an unexpected file status");
-            }
-        }
-
-        // Best-effort: Gemini expires uploaded files on its own after 48 hours, so a failed delete
-        // only wastes storage quota. Not tied to the caller's token so it still runs on shutdown.
-        private async Task DeleteFileAsync(HttpClient client, string apiKey, string fileName)
-        {
-            try
-            {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                using var request = new HttpRequestMessage(HttpMethod.Delete, $"v1beta/{fileName}");
-                request.Headers.Add("x-goog-api-key", apiKey);
-
-                using var response = await client.SendAsync(request, cts.Token);
-                if (!response.IsSuccessStatusCode)
-                {
-                    _logger.LogWarning("Could not delete Gemini file {File}: {StatusCode}", fileName, response.StatusCode);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Could not delete Gemini file {File}", fileName);
-            }
         }
 
         private TranscriptionResult ParseResponse(string body)
@@ -355,20 +229,6 @@ namespace TikTokArchive.Web.Services
         {
             [JsonPropertyName("hasSpeech")] public bool? HasSpeech { get; set; }
             [JsonPropertyName("transcript")] public string? Transcript { get; set; }
-        }
-
-        private sealed class GeminiFileEnvelope
-        {
-            [JsonPropertyName("file")] public GeminiFile? File { get; set; }
-        }
-
-        private sealed class GeminiFile
-        {
-            [JsonPropertyName("name")] public string? Name { get; set; }
-            [JsonPropertyName("displayName")] public string? DisplayName { get; set; }
-            [JsonPropertyName("uri")] public string? Uri { get; set; }
-            [JsonPropertyName("mimeType")] public string? MimeType { get; set; }
-            [JsonPropertyName("state")] public string? State { get; set; }
         }
 
         private sealed class GeminiRequest

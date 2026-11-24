@@ -548,41 +548,54 @@ else if (activeTab == 3)
         </p>
 
         <label class="label">Transcription engine</label>
-        <div class="mb-4 flex flex-wrap gap-4">
+        <div class="mb-1 flex flex-wrap gap-4">
             <label class="inline-flex items-center gap-2 text-sm text-ink">
-                <input type="radio" name="transcriptionProvider" checked="@(transcriptionProvider == AiProvider.Local)"
-                       @onchange="@(() => transcriptionProvider = AiProvider.Local)" />
+                <input type="radio" name="transcriptionProvider" checked="@(transcriptionProvider == TranscriptionEngine.Whisper)"
+                       @onchange="@(() => transcriptionProvider = TranscriptionEngine.Whisper)" />
                 Local model (Whisper)
             </label>
             <label class="inline-flex items-center gap-2 text-sm text-ink">
-                <input type="radio" name="transcriptionProvider" checked="@(transcriptionProvider == AiProvider.Gemini)"
-                       @onchange="@(() => transcriptionProvider = AiProvider.Gemini)" />
-                Google Gemini
+                <input type="radio" name="transcriptionProvider" checked="@(transcriptionProvider == TranscriptionEngine.GeminiTranscribe)"
+                       @onchange="@(() => transcriptionProvider = TranscriptionEngine.GeminiTranscribe)" />
+                Gemini Transcribe
+            </label>
+            <label class="inline-flex items-center gap-2 text-sm text-ink">
+                <input type="radio" name="transcriptionProvider" checked="@(transcriptionProvider == TranscriptionEngine.Gemini)"
+                       @onchange="@(() => transcriptionProvider = TranscriptionEngine.Gemini)" />
+                Gemini model (whole video)
             </label>
         </div>
-
-        <label class="label" for="geminiTranscriptionModel">Transcription model</label>
-        <select id="geminiTranscriptionModel" class="input mb-1 max-w-xs" @bind="selectedGeminiTranscriptionModel">
-            <option value="">Same as the model above</option>
-            @if (geminiModels.Count == 0)
-            {
-                @if (!string.IsNullOrWhiteSpace(selectedGeminiTranscriptionModel))
-                {
-                    <option value="@selectedGeminiTranscriptionModel">@selectedGeminiTranscriptionModel</option>
-                }
-            }
-            else
-            {
-                @foreach (var model in geminiModels)
-                {
-                    <option value="@model.Id">@model.DisplayName</option>
-                }
-            }
-        </select>
         <p class="mb-4 text-xs text-faint">
-            Used when the transcription engine is Gemini (fetch models above to choose a different one). The whole video
-            is uploaded to Gemini for each transcription, and Gemini transcripts have no confidence score.
+            @(transcriptionProvider switch
+            {
+                TranscriptionEngine.GeminiTranscribe => "Google's dedicated speech-to-text model. Only the audio track is extracted and uploaded — about $0.005 per minute of audio. No confidence score.",
+                TranscriptionEngine.Gemini => "Uploads the whole video to the Gemini model chosen below. Billed as video tokens, so several times the cost of Gemini Transcribe. No confidence score.",
+                _ => "Runs in the local whisper-asr container. Free, but slow on CPU."
+            })
         </p>
+
+        @if (transcriptionProvider == TranscriptionEngine.Gemini)
+        {
+            <label class="label" for="geminiTranscriptionModel">Transcription model</label>
+            <select id="geminiTranscriptionModel" class="input mb-1 max-w-xs" @bind="selectedGeminiTranscriptionModel">
+                <option value="">Same as the model above</option>
+                @if (geminiModels.Count == 0)
+                {
+                    @if (!string.IsNullOrWhiteSpace(selectedGeminiTranscriptionModel))
+                    {
+                        <option value="@selectedGeminiTranscriptionModel">@selectedGeminiTranscriptionModel</option>
+                    }
+                }
+                else
+                {
+                    @foreach (var model in geminiModels)
+                    {
+                        <option value="@model.Id">@model.DisplayName</option>
+                    }
+                }
+            </select>
+            <p class="mb-4 text-xs text-faint">Fetch models above to choose a different one.</p>
+        }
 
         <button class="btn btn-primary" @onclick="SaveAiProviderSettings" disabled="@isSavingAiProvider">
             @if (isSavingAiProvider)
@@ -855,7 +868,7 @@ else if (activeTab == 3)
     private List<GeminiModelInfo> geminiModels = new();
     private bool isFetchingGeminiModels = false;
     private string systemPromptInput = string.Empty;
-    private AiProvider transcriptionProvider = AiProvider.Local;
+    private TranscriptionEngine transcriptionProvider = TranscriptionEngine.Whisper;
     private string selectedGeminiTranscriptionModel = string.Empty;
     private DateTime? aiProviderLastModified;
     private bool isSavingAiProvider = false;
@@ -961,7 +974,7 @@ else if (activeTab == 3)
             aiProvider = settings?.Provider ?? AiProvider.Local;
             geminiApiKeyConfigured = !string.IsNullOrWhiteSpace(settings?.GeminiApiKey);
             selectedGeminiModel = settings?.GeminiModel;
-            transcriptionProvider = settings?.TranscriptionProvider ?? AiProvider.Local;
+            transcriptionProvider = settings?.TranscriptionProvider ?? TranscriptionEngine.Whisper;
             selectedGeminiTranscriptionModel = settings?.GeminiTranscriptionModel ?? string.Empty;
             aiProviderLastModified = settings?.LastModified;
             // Always shown in full (unlike the API key) — either the saved override, or the
@@ -1032,7 +1045,7 @@ else if (activeTab == 3)
 
     private async Task SaveAiProviderSettings()
     {
-        if ((aiProvider == AiProvider.Gemini || transcriptionProvider == AiProvider.Gemini)
+        if ((aiProvider == AiProvider.Gemini || transcriptionProvider != TranscriptionEngine.Whisper)
             && !geminiApiKeyConfigured && string.IsNullOrWhiteSpace(geminiApiKeyInput))
         {
             Toast.Show("Enter a Gemini API key before switching to Gemini", ToastSeverity.Warning);

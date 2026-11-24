@@ -25,5 +25,20 @@ namespace TikTokArchive.Web.Options
         /// the engine transcribes poorly. ~exp(-0.7); raise it to flag more aggressively.
         /// </summary>
         public double LowConfidenceThreshold { get; set; } = 0.5;
+
+        /// <summary>Model used by the Gemini Transcribe engine (Interactions API, audio-only input).</summary>
+        public string GeminiTranscribeModel { get; set; } = "gemini-3.5-transcribe";
+
+        /// <summary>
+        /// Gemini Transcribe mode: "verbatim" keeps every spoken word (fillers, false starts), so
+        /// all of it is searchable; "smart" strips disfluencies and formats for reading.
+        /// </summary>
+        public string GeminiTranscribeMode { get; set; } = "verbatim";
+
+        /// <summary>ffmpeg executable, used to extract audio for the Gemini Transcribe engine.</summary>
+        public string FfmpegPath { get; set; } = "ffmpeg";
+
+        /// <summary>ffprobe executable, used to detect whether a video has an audio stream.</summary>
+        public string FfprobePath { get; set; } = "ffprobe";
     }
 }
