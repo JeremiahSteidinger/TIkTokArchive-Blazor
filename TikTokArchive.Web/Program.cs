@@ -122,6 +122,8 @@ namespace TikTokArchive.Web
                 // DB-backed AiProviderSettings row on every call.
                 builder.Services.AddScoped<WhisperAsrSpeechToTextService>();
                 builder.Services.AddScoped<GeminiSpeechToTextService>();
+                builder.Services.AddScoped<GeminiTranscribeSpeechToTextService>();
+                builder.Services.AddSingleton<AudioExtractor>();
                 builder.Services.AddScoped<ISpeechToTextService, SpeechToTextProviderRouter>();
                 builder.Services.AddHostedService<TranscriptionBackgroundService>();
             }

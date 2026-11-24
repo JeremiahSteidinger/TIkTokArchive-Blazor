@@ -6,8 +6,9 @@ WORKDIR /app
 EXPOSE 8080
 EXPOSE 8081
 
+# ffmpeg extracts audio for the Gemini Transcribe speech-to-text engine (audio-only input).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 ca-certificates \
+ && apt-get install -y --no-install-recommends python3 ca-certificates ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
 # This stage is used to build the service project
